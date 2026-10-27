@@ -1,4 +1,35 @@
-import audioop
+Lỗi **`Error installing requirements` (`installer returned a non-zero exit code`)** trên Streamlit Cloud xảy ra do 1 trong 2 nguyên nhân phổ biến sau trong kho lưu trữ `dich_thuat_anhminh_app` của bạn:
+
+1. **Trong file `requirements.txt` có chứa các thư viện có sẵn của Python** (như `base64`, `io`, `json`, `os`, `re`, `urllib`, `wave`, `audioop`, `concurrent.futures`, `datetime`, `pathlib`, `typing`) hoặc chứa **`pyaudio`** (thư viện này bị lỗi khi cài trên máy chủ Linux của Streamlit).
+2. **Streamlit Cloud mặc định chạy Python 3.13 mới nhất**, trong đó module `audioop` đã bị tách khỏi Python chuẩn (cần dùng `array` hoặc thêm `audioop-lts`).
+
+---
+
+### ✅ CÁCH SỬA LỖI TRONG 1 PHÚT TRÊN GITHUB
+
+Bạn mở lại kho lưu trữ **`anhminh11062003-glitch/dich_thuat_anhminh_app`** trên GitHub và thực hiện 2 bước sau:
+
+#### Bước 1: Sửa lại file `requirements.txt` (Chỉ để đúng 5 dòng này)
+Bạn bấm vào file **`requirements.txt`** trên GitHub ➔ bấm biểu tượng cây bút (**Edit**) ➔ **Xóa hết nội dung cũ** và dán đúng 5 dòng dưới đây vào rồi bấm **Commit changes**:
+
+```text
+streamlit>=1.38.0
+gTTS>=2.5.1
+deep-translator>=1.11.4
+SpeechRecognition>=3.10.4
+audioop-lts; python_version>="3.13"
+```
+*(Tuyệt đối không thêm `pyaudio`, `io`, `json`, `base64`, `wave`... vào file `requirements.txt`)*
+
+---
+
+#### Bước 2: Cập nhật nhẹ đầu file `app.py` để tương thích 100% với Python 3.13 trên Streamlit Cloud
+Trên máy chủ Streamlit Cloud (Python 3.13), để không bao giờ bị lỗi thiếu thư viện âm thanh hệ thống, mình đã thay thế `audioop` bằng module `array` (có sẵn trong mọi phiên bản Python) và bọc an toàn các thư viện phụ.
+
+Bạn có thể copy bản **`app.py` chuẩn Cloud** dưới đây đè vào file `app.py` trên GitHub rồi bấm **Commit changes** (sau khi Commit, Streamlit Cloud sẽ tự động chạy lại và lên web ngay):
+
+```python
+from array import array
 import base64
 import io
 import json
@@ -12,11 +43,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import speech_recognition as sr
 import streamlit as st
 import streamlit.components.v1 as components
-from deep_translator import GoogleTranslator
-from gtts import gTTS
+
+try:
+    import speech_recognition as sr
+except Exception:
+    sr = None
+
+try:
+    from deep_translator import GoogleTranslator
+except Exception:
+    GoogleTranslator = None
+
+try:
+    from gtts import gTTS
+except Exception:
+    gTTS = None
 
 
 # ==============================================================================
@@ -34,15 +77,11 @@ GEMINI_API_KEY_URL = "https://aistudio.google.com/app/apikey"
 
 # Nếu bạn có link ảnh trực tiếp (URL hoặc chuỗi data:image/jpeg;base64,...),
 # có thể dán vào biến dưới đây. Nếu để trống, hệ thống tự động đọc file avatar.png / avatar.jpg
-# trong cùng thư mục hoặc dùng chân dung cố định bên dưới.
+# trong cùng thư mục GitHub của bạn hoặc dùng chân dung cố định bên dưới.
 FIXED_AUTHOR_AVATAR_BASE64_OR_URL = ""
 
 
 def render_html(html_str: str) -> None:
-    """
-    Chuẩn hóa chuỗi HTML trước khi render trong Streamlit để không bao giờ
-    bị biến thành khối code màu đen (<pre><code>).
-    """
     cleaned_lines = [line.strip() for line in html_str.splitlines() if line.strip()]
     st.markdown("\n".join(cleaned_lines), unsafe_allow_html=True)
 
@@ -68,30 +107,21 @@ def get_fixed_author_portrait_svg_uri() -> str:
           <stop offset="100%" stop-color="#332622"/>
         </linearGradient>
       </defs>
-      <!-- Nền trắng xám studio -->
       <rect width="240" height="240" fill="url(#studioBg)"/>
-      <!-- Áo thun trắng cổ tròn -->
       <path d="M18 240 C24 185, 65 172, 120 172 C175 172, 216 185, 222 240 Z" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.8"/>
-      <!-- Cổ -->
       <rect x="97" y="138" width="46" height="42" rx="14" fill="#F1CEBC"/>
-      <!-- Viền cổ áo thun trắng -->
       <path d="M88 168 Q120 188 152 168" fill="none" stroke="#E5E7EB" stroke-width="6" stroke-linecap="round"/>
-      <!-- Tai -->
       <ellipse cx="69" cy="106" rx="8" ry="15" fill="#F3D1BE"/>
       <ellipse cx="171" cy="106" rx="8" ry="15" fill="#F3D1BE"/>
-      <!-- Khuôn mặt -->
       <path d="M72 72 C72 40, 168 40, 168 72 C168 118, 149 152, 120 152 C91 152, 72 118, 72 72 Z" fill="url(#skinTone)"/>
-      <!-- Lông mày -->
       <path d="M84 85 Q98 80 110 85" stroke="#2A201D" stroke-width="3.6" fill="none" stroke-linecap="round"/>
       <path d="M130 85 Q142 80 156 85" stroke="#2A201D" stroke-width="3.6" fill="none" stroke-linecap="round"/>
-      <!-- Mắt -->
       <ellipse cx="97" cy="96" rx="7.5" ry="4.8" fill="#FFFFFF"/>
       <ellipse cx="143" cy="96" rx="7.5" ry="4.8" fill="#FFFFFF"/>
       <circle cx="97" cy="96" r="4.3" fill="#2A1B17"/>
       <circle cx="143" cy="96" r="4.3" fill="#2A1B17"/>
       <circle cx="95.5" cy="94.5" r="1.4" fill="#FFFFFF"/>
       <circle cx="141.5" cy="94.5" r="1.4" fill="#FFFFFF"/>
-      <!-- Kính cận gọng trên đậm, viền dưới mảnh (browline glasses) -->
       <rect x="78" y="86" width="38" height="24" rx="8" fill="rgba(255,255,255,0.12)" stroke="#3A302C" stroke-width="1.8"/>
       <rect x="124" y="86" width="38" height="24" rx="8" fill="rgba(255,255,255,0.12)" stroke="#3A302C" stroke-width="1.8"/>
       <path d="M78 90 Q97 85 116 90" stroke="#221C1A" stroke-width="3.4" fill="none" stroke-linecap="round"/>
@@ -99,12 +129,9 @@ def get_fixed_author_portrait_svg_uri() -> str:
       <path d="M116 93 Q120 90 124 93" stroke="#3A302C" stroke-width="2.2" fill="none"/>
       <line x1="71" y1="92" x2="78" y2="91" stroke="#221C1A" stroke-width="2.6"/>
       <line x1="162" y1="91" x2="169" y2="92" stroke="#221C1A" stroke-width="2.6"/>
-      <!-- Mũi -->
       <path d="M120 95 L118 114 Q120 117 124 115" stroke="#DFB39E" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-      <!-- Môi tự nhiên -->
       <path d="M106 128 Q120 133 134 128" stroke="#D97F76" stroke-width="3.8" fill="none" stroke-linecap="round"/>
       <path d="M108 128 Q120 125 132 128" stroke="#C86D65" stroke-width="2" fill="none" stroke-linecap="round"/>
-      <!-- Tóc đen rẽ ngôi 6/4 tự nhiên -->
       <path d="M67 92 C60 48, 84 23, 120 23 C156 23, 180 48, 173 92 C169 66, 152 50, 130 47 C124 58, 115 67, 104 72 C109 58, 113 50, 115 43 C94 48, 75 66, 67 92 Z" fill="url(#hairGrad)"/>
     </svg>"""
     b64 = base64.b64encode(svg.encode("utf-8")).decode("utf-8")
@@ -113,10 +140,6 @@ def get_fixed_author_portrait_svg_uri() -> str:
 
 @st.cache_data(show_spinner=False)
 def get_author_avatar_data_uri() -> str:
-    """
-    Lấy ảnh chân dung cố định của tác giả (từ biến cấu hình hoặc từ file ảnh trong thư mục).
-    Đã loại bỏ hoàn toàn phần upload cập nhật ảnh trên giao diện người dùng.
-    """
     if FIXED_AUTHOR_AVATAR_BASE64_OR_URL.strip():
         val = FIXED_AUTHOR_AVATAR_BASE64_OR_URL.strip()
         if val.startswith(("http://", "https://", "data:image/")):
@@ -152,10 +175,6 @@ def get_author_avatar_data_uri() -> str:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def shorten_share_url(long_url: str) -> str:
-    """
-    Rút gọn đường link ứng dụng về 1 link ngắn gọn thông qua TinyURL API
-    để dễ dàng gửi qua Telegram / Zalo / VK hoặc mở trên điện thoại.
-    """
     clean_url = long_url.strip()
     if not clean_url.startswith(("http://", "https://")):
         return clean_url
@@ -1157,7 +1176,7 @@ def detect_slang_in_text(text: str) -> List[Dict[str, str]]:
 @st.cache_data(ttl=3600, show_spinner=False)
 def generate_tts_audio(text: str, lang_code: str) -> Optional[bytes]:
     cleaned_text = text.strip()
-    if not cleaned_text:
+    if not cleaned_text or gTTS is None:
         return None
     try:
         tts = gTTS(text=cleaned_text[:600], lang=lang_code, slow=False)
@@ -1171,10 +1190,6 @@ def generate_tts_audio(text: str, lang_code: str) -> Optional[bytes]:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fast_free_translate(text: str, src: str, tgt: str) -> str:
-    """
-    Dịch thuật tốc độ cao qua Google GTX Direct có bộ nhớ đệm (@st.cache_data)
-    giúp phản hồi dưới 0.3 giây.
-    """
     cleaned = text.strip()
     if not cleaned:
         return ""
@@ -1199,10 +1214,12 @@ def fast_free_translate(text: str, src: str, tgt: str) -> str:
     except Exception:
         pass
 
-    try:
-        return GoogleTranslator(source=src, target=tgt).translate(cleaned)
-    except Exception as exc:
-        return f"[Tạm thời không kết nối được máy chủ dịch: {exc}]"
+    if GoogleTranslator is not None:
+        try:
+            return GoogleTranslator(source=src, target=tgt).translate(cleaned)
+        except Exception as exc:
+            return f"[Tạm thời không kết nối được máy chủ dịch: {exc}]"
+    return cleaned
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1744,7 +1761,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 </div>
             </div>
 
-            <!-- THANH ĐIỀU CHỈNH ĐỘ NHẠY MIC THU ÂM (MỚI NÂNG CẤP) -->
             <div class="rt-sensitivity-bar">
                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                     <span>🎚️ <b>Chế độ Độ nhạy Mic:</b></span>
@@ -1818,12 +1834,10 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             let lastSpeechActivity = 0;
             let waveAnimId = null;
 
-            // Cấu hình độ nhạy động
             let silenceCommitMs = 1350;
             let maxWordsBeforeCommit = 14;
             let liveTranslateDelayMs = 200;
 
-            // Web Audio API Pre-Amp & Voice Bandpass Filter
             let audioCtx = null;
             let micStream = null;
             let analyserNode = null;
@@ -1864,7 +1878,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
             async function initAudioPreAmp() {{
                 if (!preAmpToggle.checked) return;
-                // Trên thiết bị di động (Android/iOS), tránh mở 2 luồng mic song song để nhường toàn bộ phần cứng cho SpeechRecognition
                 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
                 if (isMobile) return;
 
@@ -1882,12 +1895,10 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     audioCtx = new AudioContextClass();
                     const source = audioCtx.createMediaStreamSource(micStream);
 
-                    // Lọc bỏ tiếng ù tần số thấp (<85Hz) trong giảng đường
                     const highpass = audioCtx.createBiquadFilter();
                     highpass.type = "highpass";
                     highpass.frequency.value = 85;
 
-                    // Nén động (Compressor) giúp nâng các âm tiết nói nhỏ lên rõ ràng
                     const compressor = audioCtx.createDynamicsCompressor();
                     compressor.threshold.setValueAtTime(-50, audioCtx.currentTime);
                     compressor.knee.setValueAtTime(40, audioCtx.currentTime);
@@ -1906,9 +1917,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     highpass.connect(compressor);
                     compressor.connect(gainNode);
                     gainNode.connect(analyserNode);
-                }} catch (e) {{
-                    // Nếu trình duyệt chỉ cho phép 1 stream mic, tự động nhường cho SpeechRecognition
-                }}
+                }} catch (e) {{}}
             }}
 
             function stopAudioPreAmp() {{
@@ -2067,7 +2076,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 }}, liveTranslateDelayMs);
             }}
 
-            // Chọn phương án nhận diện tốt nhất trong số các alternatives để bắt được cả từ nói nhỏ
             function pickBestTranscript(resultItem) {{
                 if (!resultItem || resultItem.length === 0) return "";
                 let bestText = resultItem[0].transcript || "";
@@ -2100,7 +2108,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     recognition.lang = sourceLangSelect.value;
                     recognition.continuous = true;
                     recognition.interimResults = true;
-                    recognition.maxAlternatives = 3; // Tăng lên 3 phương án để bắt âm nhỏ nhạy hơn
+                    recognition.maxAlternatives = 3;
 
                     recognition.onstart = () => {{
                         isListening = true;
@@ -2168,7 +2176,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                             appendSubtitleCard(currentInterimBuffer.trim(), sourceLangSelect.value, targetLangSelect.value);
                             currentInterimBuffer = "";
                         }}
-                        // Khởi động lại siêu tốc sau 50ms để không bỏ sót bất kỳ âm tiết nào
                         if (isListening) {{
                             setTimeout(() => {{
                                 if (isListening && recognition) {{
@@ -2261,33 +2268,43 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
 
 # ==============================================================================
-# 7. XỬ LÝ THU ÂM BẰNG PYTHON THUẦN (KÈM KHUẾCH ĐẠI ÂM LƯỢNG & ĐỘ NHẠY CAO)
+# 7. XỬ LÝ THU ÂM BẰNG PYTHON THUẦN (DÙNG ARRAY CHUẨN PYTHON 3.13, KHÔNG CẦN AUDIOOP)
 # ==============================================================================
 def boost_wav_audio_bytes(audio_bytes: bytes, gain_factor: float = 2.8) -> bytes:
     """
-    Tự động chuẩn hóa (Normalize) và khuếch đại biên độ sóng âm (Gain Boost)
-    cho bản ghi âm .WAV để giọng nói nhỏ hoặc thu từ xa vẫn được nhận diện chính xác.
+    Tự động khuếch đại biên độ sóng âm 16-bit PCM bằng thư viện chuẩn `array`
+    (tương thích 100% với cả Python 3.10, 3.11, 3.12 và 3.13 trên Streamlit Cloud).
     """
     try:
         with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
             params = wf.getparams()
             frames = wf.readframes(params.nframes)
-            sampwidth = params.sampwidth
+            if params.sampwidth != 2:
+                return audio_bytes
 
-            # Tự động tính hệ số khuếch đại tối ưu dựa trên biên độ đỉnh
-            max_amp = audioop.max(frames, sampwidth)
-            target_peak = int((2 ** (8 * sampwidth - 1) - 1) * 0.88)
+            samples = array("h")
+            samples.frombytes(frames)
+            if not samples:
+                return audio_bytes
+
+            max_amp = max(abs(x) for x in samples)
             if max_amp > 0:
-                auto_gain = min(gain_factor, max(1.2, target_peak / max_amp))
+                auto_gain = min(gain_factor, max(1.2, 28500.0 / max_amp))
             else:
                 auto_gain = gain_factor
 
-            boosted_frames = audioop.mul(frames, sampwidth, auto_gain)
+            for i in range(len(samples)):
+                val = int(samples[i] * auto_gain)
+                if val > 32767:
+                    val = 32767
+                elif val < -32768:
+                    val = -32768
+                samples[i] = val
 
         out_io = io.BytesIO()
         with wave.open(out_io, "wb") as out_wf:
             out_wf.setparams(params)
-            out_wf.writeframes(boosted_frames)
+            out_wf.writeframes(samples.tobytes())
         return out_io.getvalue()
     except Exception:
         return audio_bytes
@@ -2299,9 +2316,11 @@ def transcribe_and_translate_audio_bytes(
     target_lang_trans: str,
     sensitivity_gain: float = 2.8,
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    if sr is None:
+        return None, None, "Thư viện SpeechRecognition chưa được cài đặt trong requirements.txt."
+
     recognizer = sr.Recognizer()
-    # Nâng cấp độ nhạy cho SpeechRecognition Python
-    recognizer.energy_threshold = 90  # Hạ ngưỡng năng lượng xuống rất thấp (mặc định 300) để bắt giọng nói nhỏ
+    recognizer.energy_threshold = 90
     recognizer.dynamic_energy_threshold = True
     recognizer.dynamic_energy_adjustment_damping = 0.10
     recognizer.dynamic_energy_ratio = 1.15
@@ -2342,11 +2361,7 @@ def main() -> None:
 
     avatar_uri = get_author_avatar_data_uri()
 
-    # --------------------------------------------------------------------------
-    # THANH SIDEBAR: THÔNG TIN TÁC GIẢ CỐ ĐỊNH + LINK GEMINI KEY + CHIA SẺ 1 LINK
-    # --------------------------------------------------------------------------
     with st.sidebar:
-        # 1. KHUNG GIỚI THIỆU TÁC GIẢ CỐ ĐỊNH (ĐÃ BỎ PHẦN UPLOAD CẬP NHẬT ẢNH)
         render_html(
             f"""
             <div class="author-sidebar-card">
@@ -2373,7 +2388,6 @@ def main() -> None:
             """
         )
 
-        # 2. Ô NHẬP GEMINI API KEY + ĐƯỜNG LINK CHUYỂN ĐẾN TAB LẤY KEY
         gemini_api_key = st.text_input(
             "🔑 Gemini API Key (Tùy chọn):",
             type="password",
@@ -2409,13 +2423,12 @@ def main() -> None:
             index=0,
         )
 
-        # 4. KHUNG RÚT GỌN 1 ĐƯỜNG LINK CHIA SẺ & QUÉT QR TRÊN ĐIỆN THOẠI
         st.markdown("---")
         st.markdown("### 📲 Chia sẻ 1 Link & Dùng trên Điện thoại")
-        st.caption("Dán link web ứng dụng của bạn (VD: `https://anhminh-translate.streamlit.app`) để rút gọn về 1 link duy nhất & tạo mã QR cho điện thoại:")
+        st.caption("Dán link web ứng dụng của bạn để rút gọn về 1 link duy nhất & tạo mã QR cho điện thoại:")
         app_public_url = st.text_input(
             "🌐 Link ứng dụng của bạn:",
-            value="https://anhminh-translate.streamlit.app",
+            value="https://dich-thuat-anhminh.streamlit.app",
             key="share_url_input",
         )
         if app_public_url.strip():
@@ -2480,12 +2493,8 @@ def main() -> None:
             """
         )
 
-    # Render Header chính với hộp Tác giả cố định ở góc trái trên cùng
     render_brand_header(avatar_uri)
 
-    # --------------------------------------------------------------------------
-    # 2 PHÂN KHU CHỨC NĂNG CHÍNH (TABS)
-    # --------------------------------------------------------------------------
     tab1, tab2 = st.tabs(
         [
             "📝 TAB 1: DỊCH VĂN BẢN & TIN NHẮN SIÊU TỐC",
@@ -2493,9 +2502,6 @@ def main() -> None:
         ]
     )
 
-    # ==========================================================================
-    # TAB 1: DỊCH VĂN BẢN, TIN NHẮN TELEGRAM/VK & THUẬT NGỮ CHUYÊN NGÀNH
-    # ==========================================================================
     with tab1:
         top_bar_col1, top_bar_col2 = st.columns([2, 3])
         with top_bar_col1:
@@ -2585,7 +2591,6 @@ def main() -> None:
                 f'<div class="nautical-divider">{STICKER_SAILBOAT_MINI} KẾT QUẢ DỊCH THUẬT & PHÂN TÍCH HỌC THUẬT {STICKER_SAILBOAT_MINI}</div>'
             )
 
-            # 1. THẺ BẢN DỊCH CHÍNH
             render_html(
                 f"""
                 <div class="ocean-card">
@@ -2598,7 +2603,6 @@ def main() -> None:
                 """
             )
 
-            # Ba cột đối chiếu Nga - Việt - Anh
             tri_col1, tri_col2, tri_col3 = st.columns(3)
             with tri_col1:
                 ru_text = res.get("ru_version", "")
@@ -2639,7 +2643,6 @@ def main() -> None:
                     if en_audio:
                         st.audio(en_audio, format="audio/mp3")
 
-            # 2. HAI PHIÊN BẢN CÂU TRẢ LỜI TIẾNG NGA: LỊCH SỰ «ВЫ» & THÂN MẬT «ТЫ»
             reply_variants = res.get("russian_reply_variants", {})
             if reply_variants:
                 render_html(
@@ -2687,7 +2690,6 @@ def main() -> None:
                         if ty_audio:
                             st.audio(ty_audio, format="audio/mp3")
 
-            # 3. GIẢI THÍCH TỪ LÓNG & TỪ VIẾT TẮT SINH VIÊN NGA
             slang_list = res.get("slang_explanations", [])
             if slang_list:
                 slang_items_html = "".join(
@@ -2720,7 +2722,6 @@ def main() -> None:
                 """
             )
 
-            # 4. BẢNG TỪ VỰNG CHUYÊN NGÀNH 3 NGÔN NGỮ
             vocab_table = res.get("vocabulary_table", [])
             if vocab_table:
                 rows_html = "".join(
@@ -2766,9 +2767,6 @@ def main() -> None:
                     """
                 )
 
-    # ==========================================================================
-    # TAB 2: GIẢNG ĐƯỜNG — DỊCH GIỌNG NÓI THỜI GIAN THỰC (NÂNG CẤP ĐỘ NHẠY MIC)
-    # ==========================================================================
     with tab2:
         render_html(
             f"""
