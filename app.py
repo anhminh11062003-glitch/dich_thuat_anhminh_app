@@ -55,6 +55,13 @@ def render_html(html_str: str) -> None:
     st.markdown("\n".join(cleaned_lines), unsafe_allow_html=True)
 
 
+def clean_api_key(raw_key: str) -> str:
+    """Làm sạch mọi ký tự thừa, khoảng trắng, dấu nháy khi người dùng dán API Key."""
+    if not raw_key:
+        return ""
+    return re.sub(r'[\s"\'\`]+', "", raw_key.strip())
+
+
 def get_fixed_author_portrait_svg_uri() -> str:
     """
     Ảnh chân dung cố định của tác giả Mai Văn Minh (nam sinh viên tóc đen rẽ ngôi,
@@ -1127,7 +1134,7 @@ def render_brand_header(avatar_uri: str) -> None:
 
 
 # ==============================================================================
-# 5. HỆ THỐNG DỊCH ĐA LUỒNG SIÊU TỐC (PARALLEL GTX + CACHE + GEMINI FLASH)
+# 5. HỆ THỐNG DỊCH ĐA LUỒNG 5 CỔNG (CHỐNG CHẶN IP STREAMLIT CLOUD + MỌI GEMINI KEY)
 # ==============================================================================
 def detect_slang_in_text(text: str) -> List[Dict[str, str]]:
     if not text:
@@ -1157,80 +1164,201 @@ def generate_tts_audio(text: str, lang_code: str) -> Optional[bytes]:
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[str]:
+    """
+    Hệ thống 5 cổng dịch độc lập (dùng POST để không bị giới hạn độ dài văn bản
+    và chống hoàn toàn lỗi TooManyRequests trên Streamlit Cloud).
+    """
+    headers_form = {
+        "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    }
+    post_body = urllib.parse.urlencode({"sl": src, "tl": tgt, "q": cleaned}).encode("utf-8")
+
+    # Cổng 1: Google Translate GTX qua phương thức POST (chịu tải văn bản dài cực tốt)
+    try:
+        url1 = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t"
+        req1 = urllib.request.Request(url1, data=post_body, headers=headers_form, method="POST")
+        with urllib.request.urlopen(req1, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                chunks = [chunk[0] for chunk in data[0] if chunk and chunk[0]]
+                if chunks:
+                    return "".join(chunks)
+    except Exception:
+        pass
+
+    # Cổng 2: Google Translate Android App Endpoint (dj=1 trả về JSON sentences siêu sạch, quota riêng)
+    try:
+        url2 = "https://translate.google.com/translate_a/single?client=at&dt=t&dj=1"
+        req2 = urllib.request.Request(url2, data=post_body, headers=headers_form, method="POST")
+        with urllib.request.urlopen(req2, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            sentences = data.get("sentences", [])
+            if sentences:
+                chunks = [s.get("trans", "") for s in sentences if s.get("trans")]
+                if chunks:
+                    return "".join(chunks)
+    except Exception:
+        pass
+
+    # Cổng 3: Chrome Extension Dictionary Endpoint (clients5.google.com - IP limit tách biệt)
+    try:
+        url3 = "https://clients5.google.com/translate_a/t?client=dict-chrome-ex"
+        req3 = urllib.request.Request(url3, data=post_body, headers=headers_form, method="POST")
+        with urllib.request.urlopen(req3, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, list) and len(data) > 0:
+                if isinstance(data[0], str):
+                    return data[0]
+                if isinstance(data[0], list):
+                    return "".join(str(x[0]) for x in data if isinstance(x, list) and x)
+            elif isinstance(data, dict) and "sentences" in data:
+                return "".join(s.get("trans", "") for s in data["sentences"] if s.get("trans"))
+    except Exception:
+        pass
+
+    # Cổng 4: Google Translate GET chia theo đoạn nếu văn bản ngắn
+    try:
+        encoded_q = urllib.parse.quote(cleaned)
+        url4 = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={src}&tl={tgt}&dt=t&q={encoded_q}"
+        req4 = urllib.request.Request(url4, headers={"User-Agent": headers_form["User-Agent"]})
+        with urllib.request.urlopen(req4, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                chunks = [chunk[0] for chunk in data[0] if chunk and chunk[0]]
+                if chunks:
+                    return "".join(chunks)
+    except Exception:
+        pass
+
+    # Cổng 5: MyMemory API dự phòng (miễn phí, không chặn IP Cloud)
+    try:
+        src_mm = "ru" if src == "auto" else src
+        mm_url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(cleaned[:480])}&langpair={src_mm}|{tgt}"
+        req5 = urllib.request.Request(mm_url, headers={"User-Agent": headers_form["User-Agent"]})
+        with urllib.request.urlopen(req5, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            trans_text = data.get("responseData", {}).get("translatedText", "")
+            if trans_text and "MYMEMORY WARNING" not in trans_text.upper():
+                return trans_text
+    except Exception:
+        pass
+
+    # Cổng 6: deep-translator (chỉ gọi cuối cùng nếu cả 5 cổng trên đều nghẽn)
+    if GoogleTranslator is not None:
+        try:
+            res = GoogleTranslator(source=src, target=tgt).translate(cleaned)
+            if res and "too many requests" not in res.lower():
+                return res
+        except Exception:
+            pass
+
+    return None
+
+
 def fast_free_translate(text: str, src: str, tgt: str) -> str:
+    """
+    Dịch thuật tốc độ cao qua 5 cổng dự phòng + Bộ nhớ đệm thông minh
+    (Chỉ lưu cache khi dịch thành công, tuyệt đối không cache lỗi).
+    """
     cleaned = text.strip()
     if not cleaned:
         return ""
     if src == tgt:
         return cleaned
 
-    try:
-        encoded_q = urllib.parse.quote(cleaned)
-        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={src}&tl={tgt}&dt=t&q={encoded_q}"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            },
-        )
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
-                translated_chunks = [chunk[0] for chunk in data[0] if chunk and chunk[0]]
-                if translated_chunks:
-                    return "".join(translated_chunks)
-    except Exception:
-        pass
+    if "translation_mem_cache" not in st.session_state:
+        st.session_state["translation_mem_cache"] = {}
 
-    if GoogleTranslator is not None:
-        try:
-            return GoogleTranslator(source=src, target=tgt).translate(cleaned)
-        except Exception as exc:
-            return f"[Tạm thời không kết nối được máy chủ dịch: {exc}]"
-    return cleaned
+    cache_key = f"{src}::{tgt}::{cleaned}"
+    cached_val = st.session_state["translation_mem_cache"].get(cache_key)
+    if cached_val:
+        return cached_val
+
+    translated = _try_multi_endpoint_translate(cleaned, src, tgt)
+    if translated:
+        st.session_state["translation_mem_cache"][cache_key] = translated
+        return translated
+
+    return "⚠️ Máy chủ dịch miễn phí đang bận trong giây lát. Bạn hãy bấm lại nút «🚀 Dịch & Phân Tích Ngay» hoặc dán bất kỳ Gemini API Key nào vào cột trái nhé!"
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def discover_available_gemini_models(api_key: str) -> List[str]:
-    preferred = [
+    """
+    Tự động dò tất cả các model Gemini mà API Key của người dùng được phép gọi,
+    đồng thời sắp xếp ưu tiên các model nhanh và ổn định nhất để Key nào cũng vào được.
+    """
+    clean_k = clean_api_key(api_key)
+    preferred_order = [
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
-        "gemini-2.5-flash",
+        "gemini-1.5-flash",
         "gemini-1.5-flash-latest",
+        "gemini-1.5-flash-8b",
+        "gemini-1.5-pro",
+        "gemini-1.5-pro-latest",
+        "gemini-pro",
     ]
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={urllib.parse.quote(api_key.strip())}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            available = []
-            for m in data.get("models", []):
-                methods = m.get("supportedGenerationMethods", [])
-                if "generateContent" in methods:
-                    short_name = m.get("name", "").replace("models/", "")
-                    if "gemini" in short_name:
-                        available.append(short_name)
-            if available:
-                sorted_models = [p for p in preferred if p in available]
-                for a in available:
-                    if a not in sorted_models:
-                        sorted_models.append(a)
-                return sorted_models
-    except Exception:
-        pass
-    return preferred
+    if not clean_k:
+        return preferred_order
+
+    cache_name = f"gemini_models_{clean_k[:8]}_{len(clean_k)}"
+    if cache_name in st.session_state:
+        return st.session_state[cache_name]
+
+    discovered: List[str] = []
+    for api_ver in ["v1beta", "v1"]:
+        try:
+            url = f"https://generativelanguage.googleapis.com/{api_ver}/models?key={urllib.parse.quote(clean_k)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for m in data.get("models", []):
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" in methods:
+                        short_name = m.get("name", "").replace("models/", "")
+                        if "gemini" in short_name and "vision" not in short_name and "embedding" not in short_name:
+                            if short_name not in discovered:
+                                discovered.append(short_name)
+                if discovered:
+                    break
+        except Exception:
+            pass
+
+    if discovered:
+        ordered = [p for p in preferred_order if p in discovered]
+        for d in discovered:
+            if d not in ordered:
+                ordered.append(d)
+        st.session_state[cache_name] = ordered
+        return ordered
+
+    return preferred_order
 
 
 def call_gemini_rest_api(api_key: str, system_prompt: str, user_text: str) -> Tuple[Optional[str], Optional[str]]:
-    models_to_try = discover_available_gemini_models(api_key)
+    """
+    Hỗ trợ MỌI Gemini API Key (thử đa model từ 2.5-flash, 2.0-flash, 1.5-flash, 1.5-pro...
+    và tự động chuyển đổi giữa JSON mode & Standard Prompt nếu model không hỗ trợ system_instruction).
+    """
+    clean_k = clean_api_key(api_key)
+    if not clean_k:
+        return None, "Empty API Key"
+
+    models_to_try = discover_available_gemini_models(clean_k)
     last_error = ""
 
-    for model_name in models_to_try[:2]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(api_key.strip())}"
-        payload = {
-            "system_instruction": {"parts": [{"text": system_prompt}]},
-            "contents": [{"parts": [{"text": f"Văn bản cần xử lý:\n{user_text}"}]}],
+    combined_prompt = f"{system_prompt}\n\n---\nVăn bản cần xử lý:\n{user_text}"
+
+    # Thử tối đa 6 model khác nhau để đảm bảo nếu 1 model hết quota (429) hoặc không hỗ trợ,
+    # hệ thống tự nhảy sang model tiếp theo của Key đó ngay lập tức
+    for model_name in models_to_try[:6]:
+        # Chế độ 1: Gọi v1beta có JSON responseMimeType
+        url_v1beta = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(clean_k)}"
+        payload_json_mode = {
+            "contents": [{"parts": [{"text": combined_prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,
                 "responseMimeType": "application/json",
@@ -1238,39 +1366,69 @@ def call_gemini_rest_api(api_key: str, system_prompt: str, user_text: str) -> Tu
         }
         try:
             req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
+                url_v1beta,
+                data=json.dumps(payload_json_mode).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=12) as resp:
                 resp_data = json.loads(resp.read().decode("utf-8"))
                 candidates = resp_data.get("candidates", [])
                 if candidates:
                     parts = candidates[0].get("content", {}).get("parts", [])
                     if parts and "text" in parts[0]:
                         return parts[0]["text"], None
+        except urllib.error.HTTPError as http_err:
+            err_body = ""
+            try:
+                err_body = http_err.read().decode("utf-8", errors="ignore")
+            except Exception:
+                pass
+            last_error = f"HTTP {http_err.code}: {err_body[:200]}"
+            # Nếu lỗi 400 (model cũ không hỗ trợ responseMimeType), thử gọi lại không có responseMimeType
+            if http_err.code == 400 and "API_KEY_INVALID" not in err_body:
+                try:
+                    payload_plain = {
+                        "contents": [{"parts": [{"text": combined_prompt}]}],
+                        "generationConfig": {"temperature": 0.2},
+                    }
+                    req2 = urllib.request.Request(
+                        url_v1beta,
+                        data=json.dumps(payload_plain).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req2, timeout=12) as resp2:
+                        resp_data2 = json.loads(resp2.read().decode("utf-8"))
+                        candidates2 = resp_data2.get("candidates", [])
+                        if candidates2:
+                            parts2 = candidates2[0].get("content", {}).get("parts", [])
+                            if parts2 and "text" in parts2[0]:
+                                return parts2[0]["text"], None
+                except Exception:
+                    pass
+            if "API_KEY_INVALID" in err_body:
+                return None, "Mã Gemini API Key không chính xác. Vui lòng kiểm tra lại!"
         except Exception as exc:
             last_error = str(exc)
 
     return None, last_error
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
 def call_gemini_smart_translate(
     api_key: str,
     source_text: str,
     direction: str,
     domain: str,
 ) -> Tuple[Optional[Dict], Optional[str]]:
-    clean_key = api_key.strip()
-    if not clean_key.startswith("AIza"):
-        return None, "Invalid Key Format"
+    clean_k = clean_api_key(api_key)
+    if not clean_k:
+        return None, "Empty Key"
 
     system_prompt = f"""
 Bạn là chuyên gia dịch thuật cao cấp Nga - Việt - Anh (RU - VI - EN) và cố vấn học thuật cho sinh viên Việt Nam tại Nga.
 Chuyên ngành ưu tiên: "{domain}". Chiều dịch: "{direction}".
-Trả về JSON hợp lệ theo cấu trúc:
+CHỈ TRẢ VỀ đúng 1 đối tượng JSON hợp lệ (không thêm markdown) theo cấu trúc sau:
 {{
   "main_translation": "Bản dịch tự nhiên nhất theo chiều dịch đã chọn",
   "ru_version": "Bản tiếng Nga tương ứng",
@@ -1292,24 +1450,31 @@ Trả về JSON hợp lệ theo cấu trúc:
 }}
 """
 
-    raw_text, err = call_gemini_rest_api(clean_key, system_prompt, source_text)
+    raw_text, err = call_gemini_rest_api(clean_k, system_prompt, source_text)
     if not raw_text:
         return None, err
 
     try:
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text.strip(), flags=re.IGNORECASE)
+        # Trích xuất khối JSON nếu model trả kèm lời dẫn
+        json_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if json_match:
+            cleaned = json_match.group(0)
         parsed = json.loads(cleaned)
         return parsed, None
     except Exception as exc:
         return None, str(exc)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def fallback_smart_translate(
     source_text: str,
     direction: str,
     domain: str,
 ) -> Dict:
+    """
+    Chế độ Dịch Đa Luồng GTX Siêu Tốc (5 Cổng POST dự phòng):
+    Hoạt động mượt mà không cần API Key, không bị chặn bởi giới hạn IP của Streamlit Cloud.
+    """
     text_for_translation = source_text.strip()
     detected_slang = detect_slang_in_text(text_for_translation)
     expanded_ru_text = text_for_translation
@@ -1367,7 +1532,7 @@ def fallback_smart_translate(
 
     if direction == "🇷🇺 Tiếng Nga ➔ 🇻🇳 Tiếng Việt":
         formal_vy_full = "Здравствуйте! Спасибо за важную информацию, мы обязательно примем это к сведению и всё выполним по правилам."
-        formal_note = "Mẫu câu trả lời lễ phép (Ngôi «Вы» — Gửi Giảng viên / Trưởng tầng / Ban quản lý): «Xin chào! Cảm ơn vì thông tin quan trọng, chúng em nhất định sẽ lưu ý và thực hiện đúng quy định ạ.»"
+        formal_note = "Mẫu câu trả lời lễ phép (Ngôi «Вы» — Gửi Giảng viên / Phòng Visa / Деканат): «Xin chào! Cảm ơn vì thông tin quan trọng, chúng em nhất định sẽ lưu ý và thực hiện đúng quy định ạ.»"
         casual_ty_full = "Привет! Понял, спасибо за инфу! Обязательно передам ребятам, всё сделаем как надо."
         casual_note = "Mẫu câu trả lời thân mật (Ngôi «Ты» — Nhắn bạn học / nhóm chat Telegram): «Chào cậu! Mình hiểu rồi, cảm ơn vì thông tin nhé! Mình sẽ nhắn lại với mọi người, tụi mình sẽ làm đầy đủ.»"
     else:
@@ -1435,8 +1600,8 @@ def fallback_smart_translate(
             "casual_ty_vi_note": casual_note,
         },
         "study_tip": (
-            "Khi giao tiếp trong nhóm sinh viên quốc tế hoặc KTX (Общежитие), các từ như «скинуться» (góp tiền chung), "
-            "«выговор» (khiển trách), «староста этажа» (trưởng tầng) rất hay xuất hiện trong thông báo trên Telegram/VK."
+            "Khi làm việc với Phòng Quốc tế (Международный отдел) về gia hạn thị thực (продление визы) hoặc thực tập (практика), "
+            "luôn sử dụng ngôi «Вы» trang trọng và chuẩn bị hồ sơ trước ít nhất 30–45 ngày làm việc."
         ),
         "is_fallback": True,
     }
@@ -2237,13 +2402,9 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
 
 # ==============================================================================
-# 7. XỬ LÝ THU ÂM BẰNG PYTHON THUẦN (DÙNG ARRAY CHUẨN PYTHON 3.13, KHÔNG CẦN AUDIOOP)
+# 7. XỬ LÝ THU ÂM BẰNG PYTHON THUẦN (DÙNG ARRAY CHUẨN PYTHON 3.13)
 # ==============================================================================
 def boost_wav_audio_bytes(audio_bytes: bytes, gain_factor: float = 2.8) -> bytes:
-    """
-    Tự động khuếch đại biên độ sóng âm 16-bit PCM bằng thư viện chuẩn `array`
-    (tương thích 100% với cả Python 3.10, 3.11, 3.12 và 3.13 trên Streamlit Cloud).
-    """
     try:
         with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
             params = wf.getparams()
@@ -2358,10 +2519,10 @@ def main() -> None:
         )
 
         gemini_api_key = st.text_input(
-            "🔑 Gemini API Key (Tùy chọn):",
+            "🔑 Gemini API Key (Chấp nhận mọi Key):",
             type="password",
-            placeholder="Dán mã AIzaSy... (hoặc để trống)",
-            help="Nếu để trống, ứng dụng dùng chế độ Dịch Đa Luồng GTX Siêu Tốc (< 0.4 giây) miễn phí 100%!",
+            placeholder="Dán bất kỳ Gemini API Key nào (hoặc để trống)",
+            help="Hỗ trợ mọi loại Gemini API Key (2.5-flash, 2.0-flash, 1.5-flash, 1.5-pro...). Nếu để trống, ứng dụng tự động dùng chế độ Dịch Đa Luồng GTX Siêu Tốc 5 cổng miễn phí!",
         )
 
         render_html(
@@ -2372,11 +2533,13 @@ def main() -> None:
             """
         )
 
-        clean_key_input = gemini_api_key.strip()
-        if clean_key_input and clean_key_input.startswith("AIza"):
-            st.success("✨ Chế độ: **Gemini AI Thông Minh** đã kích hoạt!")
+        clean_key_input = clean_api_key(gemini_api_key)
+        if clean_key_input:
+            avail_models = discover_available_gemini_models(clean_key_input)
+            top_model = avail_models[0] if avail_models else "gemini-flash"
+            st.success(f"✨ Đã nhận Gemini API Key! (Model ưu tiên: `{top_model}` + Tự động dự phòng GTX)")
         else:
-            st.info("⚡ Chế độ: **Dịch Đa Luồng Siêu Tốc (<0.4s)** (Google GTX + Từ điển Slang).")
+            st.info("⚡ Chế độ hiện tại: **Dịch Đa Luồng GTX Siêu Tốc (5 Cổng POST)** — Không cần Key!")
 
         st.markdown("---")
         st.markdown("### 🎓 Chuyên ngành Ưu tiên")
@@ -2455,7 +2618,7 @@ def main() -> None:
             f"""
             <div style="text-align:center; font-size:0.82rem; padding: 8px; background: rgba(255,255,255,0.08); border-radius: 12px;">
                 {STICKER_SAILBOAT_MINI}<br/>
-                <b>Anh Minh Translate v5.0 (Mobile & High-Mic)</b><br/>
+                <b>Anh Minh Translate v5.2 (5-Port GTX & All-Gemini)</b><br/>
                 Tác giả: <b>Mai Văn Minh</b><br/>
                 <i>Đóng tàu — СПбГМТУ (Xanh-Petecbua)</i>
             </div>
@@ -2491,7 +2654,7 @@ def main() -> None:
                         {STICKER_COMPASS_3D}
                         <div>
                             <div style="font-weight:800; color:#0369A1; font-size:0.94rem;">Chuyên ngành đang chọn: {selected_domain}</div>
-                            <div style="font-size:0.82rem; color:#475569;">Tốc độ dịch Đa luồng &lt;0.4s • Tương thích hoàn toàn trên Điện thoại & Máy tính</div>
+                            <div style="font-size:0.82rem; color:#475569;">Chống nghẽn mạng 5 cổng • Hỗ trợ mọi Gemini Key & Tự động chuyển sang Đa luồng GTX</div>
                         </div>
                     </div>
                     {STICKER_SAILBOAT_MINI}
@@ -2503,7 +2666,7 @@ def main() -> None:
             "✍️ Nhập văn bản, tài liệu chuyên ngành Đóng tàu hoặc tin nhắn Telegram/VK cần dịch:",
             key="input_text_area",
             height=150,
-            placeholder="Dán tin nhắn tiếng Nga của giảng viên / bạn học, tài liệu chuyên ngành hoặc câu tiếng Việt bạn muốn dịch sang tiếng Nga vào đây...",
+            placeholder="Dán tin nhắn tiếng Nga của giảng viên / phòng Visa / bạn học, hoặc câu tiếng Việt bạn muốn dịch sang tiếng Nga vào đây...",
         )
 
         act_col1, act_col2, _ = st.columns([2, 2, 4])
@@ -2527,9 +2690,10 @@ def main() -> None:
                 result_data: Optional[Dict] = None
                 used_ai = False
 
-                if clean_key_input.startswith("AIza"):
-                    with st.spinner("🧠 Gemini AI đang phân tích..."):
-                        result_data, _ = call_gemini_smart_translate(
+                # Nếu có bất kỳ Gemini API Key nào được nhập, thử gọi Gemini trước
+                if clean_key_input:
+                    with st.spinner("🧠 Đang phân tích bằng Gemini AI..."):
+                        result_data, gemini_err = call_gemini_smart_translate(
                             api_key=clean_key_input,
                             source_text=source_text,
                             direction=direction,
@@ -2537,13 +2701,17 @@ def main() -> None:
                         )
                         if result_data:
                             used_ai = True
+                        elif gemini_err and "không chính xác" in gemini_err.lower():
+                            st.warning(f"⚠️ {gemini_err} Hệ thống đã tự động chuyển sang Chế độ Dịch Đa Luồng GTX Siêu Tốc!")
 
+                # Nếu không có Key hoặc Key tạm hết hạn mức -> Tự động dùng Dịch Đa Luồng GTX 5 cổng
                 if not result_data:
-                    result_data = fallback_smart_translate(
-                        source_text=source_text,
-                        direction=direction,
-                        domain=selected_domain,
-                    )
+                    with st.spinner("⚡ Đang dịch đa luồng siêu tốc (GTX 5-Port)..."):
+                        result_data = fallback_smart_translate(
+                            source_text=source_text,
+                            direction=direction,
+                            domain=selected_domain,
+                        )
 
                 st.session_state["last_translation_result"] = result_data
                 st.session_state["last_used_ai"] = used_ai
@@ -2553,7 +2721,7 @@ def main() -> None:
             used_ai_badge = (
                 "✨ Gemini AI Smart Mode"
                 if st.session_state.get("last_used_ai")
-                else "⚡ Đa Luồng Siêu Tốc (Parallel GTX)"
+                else "⚡ Đa Luồng Siêu Tốc (Parallel GTX 5-Port)"
             )
 
             render_html(
@@ -2752,7 +2920,7 @@ def main() -> None:
         )
 
         realtime_html = build_realtime_lecture_component(
-            gemini_api_key=gemini_api_key,
+            gemini_api_key=clean_key_input,
             selected_domain=selected_domain,
         )
         components.html(realtime_html, height=680, scrolling=False)
