@@ -1,34 +1,3 @@
-Lỗi **`Error installing requirements` (`installer returned a non-zero exit code`)** trên Streamlit Cloud xảy ra do 1 trong 2 nguyên nhân phổ biến sau trong kho lưu trữ `dich_thuat_anhminh_app` của bạn:
-
-1. **Trong file `requirements.txt` có chứa các thư viện có sẵn của Python** (như `base64`, `io`, `json`, `os`, `re`, `urllib`, `wave`, `audioop`, `concurrent.futures`, `datetime`, `pathlib`, `typing`) hoặc chứa **`pyaudio`** (thư viện này bị lỗi khi cài trên máy chủ Linux của Streamlit).
-2. **Streamlit Cloud mặc định chạy Python 3.13 mới nhất**, trong đó module `audioop` đã bị tách khỏi Python chuẩn (cần dùng `array` hoặc thêm `audioop-lts`).
-
----
-
-### ✅ CÁCH SỬA LỖI TRONG 1 PHÚT TRÊN GITHUB
-
-Bạn mở lại kho lưu trữ **`anhminh11062003-glitch/dich_thuat_anhminh_app`** trên GitHub và thực hiện 2 bước sau:
-
-#### Bước 1: Sửa lại file `requirements.txt` (Chỉ để đúng 5 dòng này)
-Bạn bấm vào file **`requirements.txt`** trên GitHub ➔ bấm biểu tượng cây bút (**Edit**) ➔ **Xóa hết nội dung cũ** và dán đúng 5 dòng dưới đây vào rồi bấm **Commit changes**:
-
-```text
-streamlit>=1.38.0
-gTTS>=2.5.1
-deep-translator>=1.11.4
-SpeechRecognition>=3.10.4
-audioop-lts; python_version>="3.13"
-```
-*(Tuyệt đối không thêm `pyaudio`, `io`, `json`, `base64`, `wave`... vào file `requirements.txt`)*
-
----
-
-#### Bước 2: Cập nhật nhẹ đầu file `app.py` để tương thích 100% với Python 3.13 trên Streamlit Cloud
-Trên máy chủ Streamlit Cloud (Python 3.13), để không bao giờ bị lỗi thiếu thư viện âm thanh hệ thống, mình đã thay thế `audioop` bằng module `array` (có sẵn trong mọi phiên bản Python) và bọc an toàn các thư viện phụ.
-
-Bạn có thể copy bản **`app.py` chuẩn Cloud** dưới đây đè vào file `app.py` trên GitHub rồi bấm **Commit changes** (sau khi Commit, Streamlit Cloud sẽ tự động chạy lại và lên web ngay):
-
-```python
 from array import array
 import base64
 import io
