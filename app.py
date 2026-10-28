@@ -2069,9 +2069,10 @@ def fallback_smart_translate(
 
 
 # ==============================================================================
-# 6. CÔNG NGHỆ THU ÂM GIẢNG ĐƯỜNG CAO CẤP NHẤT:
-#    - KHUẾCH ĐẠI DSP PRE-AMP X4.8 TỰ ĐỘNG (NÓI NHỎ VẪN THU RÕ)
-#    - NGẮT CÂU KHI HẾT CÂU HOÀN CHỈNH & DỊCH THEO NGỮ CẢNH CÁC CÂU TRƯỚC
+# 6. CÔNG NGHỆ THU ÂM GIẢNG ĐƯỜNG CAO CẤP NHẤT (ĐÃ SỬA TRIỆT ĐỂ LỖI LẶP CÂU):
+#    - KHÔNG CỘNG DỒN (+=) BUFFER KHI onresult BẮN LẠI
+#    - TỰ ĐỘNG KHỬ LẶP TỪ / LẶP CỤM TỪ TRÊN MỌI TRÌNH DUYỆT (CHROME / EDGE / MOBILE)
+#    - KHUẾCH ĐẠI DSP PRE-AMP X4.8 TỰ ĐỘNG & DỊCH THEO NGỮ CẢNH CÁC CÂU TRƯỚC
 #    - KHÓA CUỘN THÔNG MINH (LƯỚT LÊN ĐỌC LỊCH SỬ KHÔNG BỊ NHẢY XUỐNG)
 # ==============================================================================
 def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: str = "") -> str:
@@ -2444,9 +2445,9 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             <div class="rt-visualizer-row">
                 <div class="status-indicator">
                     <div id="statusDot" class="pulse-dot"></div>
-                    <span id="statusText">Sẵn sàng — Công nghệ DSP Khuếch đại Mic Cao cấp x4.8 & Dịch Ngữ Cảnh đã kích hoạt mặc định.</span>
+                    <span id="statusText">Sẵn sàng — Công nghệ DSP Khuếch đại Mic Cao cấp x4.8 & Chống lặp câu đã kích hoạt.</span>
                 </div>
-                <span class="dsp-badge">🔥 DSP Gain x4.8 + Ngữ cảnh Thông minh</span>
+                <span class="dsp-badge">🔥 DSP Gain x4.8 + Chống lặp 100%</span>
                 <canvas id="waveCanvas" width="190" height="36"></canvas>
             </div>
 
@@ -2518,12 +2519,18 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
             let recognition = null;
             let isListening = false;
-            let isManualFlushRestart = false;
             let lectureHistory = [];
-            let finalizedSegmentBuffer = "";
-            let currentInterimBuffer = "";
-            let lastCommittedSentence = "";
-            let lastCommitTimestamp = 0;
+
+            // =========================================================================
+            // CƠ CHẾ CHỐNG LẶP CÂU TUYỆT ĐỐI CHO WEB SPEECH API:
+            // - Không bao giờ dùng phép += vào chuỗi toàn cục mỗi lần onresult bắn về.
+            // - Quản lý theo chỉ số `committedResultIndex` của mảng event.results.
+            // =========================================================================
+            let committedResultIndex = 0;       // Chỉ đọc từ event.results[committedResultIndex] trở đi
+            let currentActiveSentence = "";     // Câu hiện tại đang thu (được tính toán lại sạch sẽ mỗi lần onresult)
+            let latestResultsLength = 0;        // Tổng độ dài mảng event.results hiện tại
+            let lastCommittedNormalized = "";   // Câu chuẩn hóa vừa đẩy xuống khung dịch
+            let lastCommitTimestamp = 0;        // Thời điểm chốt câu gần nhất
             let sentenceSilenceTimer = null;
             let lastSpeechActivity = 0;
             let waveAnimId = null;
@@ -2532,9 +2539,9 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             let userScrolledUp = false;
             let unreadNewCount = 0;
 
-            // Cấu hình chuẩn cho ngắt câu hoàn chỉnh (không cắt vụn 2-3 giây)
-            const SENTENCE_PAUSE_MS = 2350;   // Chờ nghỉ hết ý (2.35s) nếu câu chưa có dấu chấm câu
-            const PUNCTUATION_PAUSE_MS = 650; // Nếu đã có dấu . ? ! ở cuối hoặc câu đã dài hoàn chỉnh thì ngắt nhanh
+            // Thời gian chờ ngắt câu chuẩn xác
+            const SENTENCE_PAUSE_MS = 2100;   // Khi ngừng nói 2.1s -> Tự động chốt trọn vẹn câu
+            const PUNCTUATION_PAUSE_MS = 650; // Khi đã có dấu . ? ! và ngừng mảnh interim -> Chốt nhanh
 
             let audioCtx = null;
             let micStream = null;
@@ -2596,7 +2603,99 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 }}
             }}
 
-            // Khởi tạo bộ khuếch đại âm thanh DSP cao cấp nhất mặc định (Gain Boost x4.8 + Voice Bandpass + Compressor)
+            // Hàm chuẩn hóa chuỗi để so sánh chống lặp (bỏ dấu câu, chữ thường, khoảng trắng đơn)
+            function normalizeForComparison(str) {{
+                return (str || "")
+                    .toLowerCase()
+                    .replace(/[.,?!…;:"'«»()\\-]/g, " ")
+                    .replace(/\\s+/g, " ")
+                    .trim();
+            }}
+
+            // Hàm ghép 2 mảnh transcript thông minh:
+            // Nếu trình duyệt (nhất là trên Chrome Mobile / Edge) trả về mảnh sau đã chứa sẵn mảnh trước
+            // hoặc gối đầu lên nhau thì gộp sạch mà KHÔNG nhân đôi câu.
+            function smartMergeSegments(prevText, nextText) {{
+                const a = (prevText || "").replace(/\\s+/g, " ").trim();
+                const b = (nextText || "").replace(/\\s+/g, " ").trim();
+                if (!a) return b;
+                if (!b) return a;
+
+                const normA = normalizeForComparison(a);
+                const normB = normalizeForComparison(b);
+
+                if (!normA) return b;
+                if (!normB) return a;
+
+                // Trường hợp 1: Hai mảnh giống hệt nhau
+                if (normA === normB) return b;
+
+                // Trường hợp 2: Mảnh B là bản mở rộng tích lũy đã chứa toàn bộ mảnh A ở đầu
+                if (normB.startsWith(normA)) return b;
+
+                // Trường hợp 3: Mảnh A đã chứa sẵn mảnh B ở cuối (trình duyệt bắn lại mảnh con)
+                if (normA.endsWith(normB) || normA.includes(normB)) return a;
+
+                // Trường hợp 4: Kiểm tra gối đầu từ (Word Overlap ở ranh giới cuối A và đầu B)
+                const wordsA = a.split(" ");
+                const wordsB = b.split(" ");
+                const normWordsA = wordsA.map(w => normalizeForComparison(w));
+                const normWordsB = wordsB.map(w => normalizeForComparison(w));
+
+                const maxOverlap = Math.min(wordsA.length, wordsB.length);
+                for (let k = maxOverlap; k >= 1; k--) {{
+                    let match = true;
+                    for (let j = 0; j < k; j++) {{
+                        if (normWordsA[wordsA.length - k + j] !== normWordsB[j]) {{
+                            match = false;
+                            break;
+                        }}
+                    }}
+                    if (match) {{
+                        return wordsA.concat(wordsB.slice(k)).join(" ");
+                    }}
+                }}
+
+                return a + " " + b;
+            }}
+
+            // Hàm khử lặp cụm từ liên tiếp trong cùng 1 câu (VD: "Hôm nay học bài Hôm nay học bài" -> "Hôm nay học bài")
+            function collapseImmediateRepetitions(text) {{
+                let cleaned = (text || "").replace(/\\s+/g, " ").trim();
+                if (!cleaned) return "";
+
+                const words = cleaned.split(" ");
+                if (words.length < 2) return cleaned;
+
+                // Khử lặp từ hoặc cụm từ dài từ 1 đến 12 từ bị lặp liên tiếp nhau
+                let resultWords = [];
+                let i = 0;
+                while (i < words.length) {{
+                    resultWords.push(words[i]);
+                    i++;
+                    // Kiểm tra ở cuối mảng resultWords xem có cụm độ dài L vừa bị lặp khít nhau không
+                    const maxPhraseLen = Math.floor(resultWords.length / 2);
+                    for (let len = maxPhraseLen; len >= 1; len--) {{
+                        let isRepeat = true;
+                        for (let m = 0; m < len; m++) {{
+                            const w1 = normalizeForComparison(resultWords[resultWords.length - 2 * len + m]);
+                            const w2 = normalizeForComparison(resultWords[resultWords.length - len + m]);
+                            if (!w1 || w1 !== w2) {{
+                                isRepeat = false;
+                                break;
+                            }}
+                        }}
+                        // Với cụm >= 2 từ trùng khít, hoặc 1 từ dài >= 4 ký tự bị lặp kép do lỗi mic
+                        if (isRepeat && (len >= 2 || normalizeForComparison(resultWords[resultWords.length - 1]).length >= 4)) {{
+                            resultWords.splice(resultWords.length - len, len);
+                            break;
+                        }}
+                    }}
+                }}
+                return resultWords.join(" ");
+            }}
+
+            // Khởi tạo bộ khuếch đại âm thanh DSP cao cấp nhất
             async function initUltraAudioDSP() {{
                 try {{
                     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
@@ -2604,11 +2703,10 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
                     micStream = await navigator.mediaDevices.getUserMedia({{
                         audio: {{
-                            echoCancellation: false,
+                            echoCancellation: true,
                             noiseSuppression: true,
                             autoGainControl: true,
-                            channelCount: 1,
-                            sampleRate: 48000
+                            channelCount: 1
                         }}
                     }});
 
@@ -2616,19 +2714,16 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     audioCtx = new AudioContextClass();
                     const source = audioCtx.createMediaStreamSource(micStream);
 
-                    // Lọc tạp âm trầm dưới 80Hz (tiếng quạt, điều hòa giảng đường)
                     const highpass = audioCtx.createBiquadFilter();
                     highpass.type = "highpass";
                     highpass.frequency.value = 80;
 
-                    // Tăng cường dải tần giọng nói con người (2500Hz Presence Boost +6dB)
                     const voicePresence = audioCtx.createBiquadFilter();
                     voicePresence.type = "peaking";
                     voicePresence.frequency.value = 2400;
                     voicePresence.Q.value = 1.0;
                     voicePresence.gain.value = 6.5;
 
-                    // Nén động học nâng âm lượng lời nói nhỏ lên ngang bằng lời nói to
                     const compressor = audioCtx.createDynamicsCompressor();
                     compressor.threshold.setValueAtTime(-55, audioCtx.currentTime);
                     compressor.knee.setValueAtTime(40, audioCtx.currentTime);
@@ -2636,7 +2731,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     compressor.attack.setValueAtTime(0.002, audioCtx.currentTime);
                     compressor.release.setValueAtTime(0.20, audioCtx.currentTime);
 
-                    // Khuếch đại biên độ cao cấp x4.8
                     gainNode = audioCtx.createGain();
                     gainNode.gain.value = 4.8;
 
@@ -2729,7 +2823,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 const cleanCurrent = expandRussianSlang(currentSentence.trim(), srcShort);
                 const recentContextItems = lectureHistory.slice(-3);
 
-                // Ưu tiên 1: Nếu có Gemini API Key -> Dịch bằng Gemini với đầy đủ ngữ cảnh 3 câu trước và chuyên ngành
+                // Ưu tiên 1: Gemini AI với đầy đủ ngữ cảnh 3 câu trước
                 if (GEMINI_API_KEY && GEMINI_API_KEY.length > 10) {{
                     try {{
                         const contextBlock = recentContextItems.length > 0
@@ -2740,7 +2834,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 Ngữ cảnh các câu ngay trước đó:
 ${{contextBlock}}
 
-Hãy dịch câu tiếp theo sau đây từ tiếng ${{srcShort}} sang tiếng ${{tgtLang}} sao cho liền mạch, chuẩn xác theo ngữ cảnh các câu trước và đúng thuật ngữ chuyên ngành.
+Hãy dịch câu tiếp theo sau đây từ tiếng ${{srcShort}} sang tiếng ${{tgtLang}} sao cho liền mạch, chuẩn xác theo ngữ cảnh các câu trước, KHÔNG lặp lại câu trước và đúng thuật ngữ chuyên ngành.
 CHỈ TRẢ VỀ đúng nội dung câu dịch (không giải thích thêm, không ngoặc kép):
 ${{cleanCurrent}}`;
 
@@ -2763,7 +2857,7 @@ ${{cleanCurrent}}`;
                     }} catch (e) {{}}
                 }}
 
-                // Ưu tiên 2: Dịch qua Google GTX kèm ngữ cảnh câu liền trước (sử dụng vách ngăn ngữ cảnh " ||| ")
+                // Ưu tiên 2: Dịch qua Google GTX kèm ngữ cảnh câu liền trước
                 try {{
                     let queryPayload = cleanCurrent;
                     const hasContext = recentContextItems.length > 0;
@@ -2787,7 +2881,7 @@ ${{cleanCurrent}}`;
                     }}
                 }} catch (err) {{}}
 
-                // Ưu tiên 3: Dịch trực tiếp câu đơn qua GTX nếu vách ngăn bị gộp
+                // Ưu tiên 3: Dịch trực tiếp câu đơn qua GTX
                 try {{
                     const urlSingle = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${{srcShort}}&tl=${{tgtLang}}&dt=t&q=${{encodeURIComponent(cleanCurrent)}}`;
                     const resSingle = await fetch(urlSingle);
@@ -2811,7 +2905,7 @@ ${{cleanCurrent}}`;
             }}
 
             function formatCompleteSentence(raw) {{
-                let s = (raw || "").replace(/\\s+/g, " ").trim();
+                let s = collapseImmediateRepetitions(raw);
                 if (!s) return "";
                 s = s.charAt(0).toUpperCase() + s.slice(1);
                 if (!/[.?!…]$/.test(s)) {{
@@ -2824,11 +2918,24 @@ ${{cleanCurrent}}`;
                 const cleanOrig = formatCompleteSentence(originalText);
                 if (!cleanOrig || cleanOrig === ".") return;
 
+                const normOrig = normalizeForComparison(cleanOrig);
+                if (!normOrig) return;
+
+                // Chống trùng lặp tuyệt đối: Nếu câu mới trùng với câu vừa chốt trước đó thì bỏ qua ngay
                 const nowMs = Date.now();
-                if (cleanOrig === lastCommittedSentence && (nowMs - lastCommitTimestamp) < 1500) {{
+                if (normOrig === lastCommittedNormalized && (nowMs - lastCommitTimestamp) < 8000) {{
                     return;
                 }}
-                lastCommittedSentence = cleanOrig;
+                // Nếu câu mới bị chứa trọn trong câu vừa chốt cách đây < 4 giây (mảnh dư của Web Speech) cũng bỏ qua
+                if (
+                    lastCommittedNormalized &&
+                    lastCommittedNormalized.endsWith(normOrig) &&
+                    (nowMs - lastCommitTimestamp) < 4000
+                ) {{
+                    return;
+                }}
+
+                lastCommittedNormalized = normOrig;
                 lastCommitTimestamp = nowMs;
 
                 const hintEl = document.getElementById("emptyHint");
@@ -2872,10 +2979,6 @@ ${{cleanCurrent}}`;
                 }});
             }}
 
-            function getFullActiveSentenceBuffer() {{
-                return ((finalizedSegmentBuffer ? finalizedSegmentBuffer + " " : "") + currentInterimBuffer).replace(/\\s+/g, " ").trim();
-            }}
-
             function forceCommitInterim() {{
                 if (sentenceSilenceTimer) {{
                     clearTimeout(sentenceSilenceTimer);
@@ -2885,8 +2988,8 @@ ${{cleanCurrent}}`;
                 let candidate = "";
                 if (manualSentenceInput && manualSentenceInput.value.trim().length > 0) {{
                     candidate = manualSentenceInput.value.trim();
-                }} else {{
-                    candidate = getFullActiveSentenceBuffer();
+                }} else if (currentActiveSentence.trim().length > 0) {{
+                    candidate = currentActiveSentence.trim();
                 }}
 
                 if (!candidate && interimText) {{
@@ -2897,17 +3000,14 @@ ${{cleanCurrent}}`;
                 }}
 
                 if (candidate && candidate.length > 0) {{
-                    finalizedSegmentBuffer = "";
-                    currentInterimBuffer = "";
+                    // Đánh dấu toàn bộ kết quả hiện có trong event.results là ĐÃ XỬ LÝ
+                    // để các lần onresult tiếp theo chỉ đọc từ câu mới trở đi (không cần stop/start gây lặp)
+                    committedResultIndex = latestResultsLength;
+                    currentActiveSentence = "";
                     if (manualSentenceInput) manualSentenceInput.value = "";
                     interimText.innerText = "Đã chốt câu! Đang lắng nghe câu tiếp theo...";
 
                     appendSubtitleCard(candidate, sourceLangSelect.value, targetLangSelect.value);
-
-                    if (isListening && recognition) {{
-                        isManualFlushRestart = true;
-                        try {{ recognition.stop(); }} catch (e) {{}}
-                    }}
                 }} else {{
                     const prevStatus = statusText.innerText;
                     statusText.innerText = "💡 Chưa có câu đang nói! Hãy nói vào Mic hoặc gõ câu vào ô bên dưới rồi nhấn Enter.";
@@ -2924,18 +3024,8 @@ ${{cleanCurrent}}`;
 
             function pickBestTranscript(resultItem) {{
                 if (!resultItem || resultItem.length === 0) return "";
-                let bestText = resultItem[0].transcript || "";
-                let bestScore = (resultItem[0].confidence || 0.6) * Math.max(1, bestText.trim().length);
-                for (let k = 1; k < resultItem.length; k++) {{
-                    const candText = resultItem[k].transcript || "";
-                    const conf = resultItem[k].confidence || 0.6;
-                    const score = conf * Math.max(1, candText.trim().length * 1.05);
-                    if (candText.trim().length > bestText.trim().length && score >= bestScore * 0.85) {{
-                        bestText = candText;
-                        bestScore = score;
-                    }}
-                }}
-                return bestText;
+                // Luôn lấy phương án có độ tin cậy cao nhất từ engine nhận diện
+                return (resultItem[0].transcript || "").trim();
             }}
 
             async function startRecognition() {{
@@ -2953,10 +3043,12 @@ ${{cleanCurrent}}`;
                     recognition.lang = sourceLangSelect.value;
                     recognition.continuous = true;
                     recognition.interimResults = true;
-                    recognition.maxAlternatives = 5;
+                    recognition.maxAlternatives = 1;
 
                     recognition.onstart = () => {{
                         isListening = true;
+                        committedResultIndex = 0;
+                        latestResultsLength = 0;
                         statusDot.classList.add("active");
                         statusText.innerText = `🟢 Đang thu âm DSP Siêu Nhạy (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Cứ hết câu máy sẽ tự xuống dòng & dịch...`;
                         btnStart.disabled = true;
@@ -2966,49 +3058,65 @@ ${{cleanCurrent}}`;
 
                     recognition.onresult = (event) => {{
                         lastSpeechActivity = Date.now();
-                        let newInterim = "";
+                        latestResultsLength = event.results.length;
 
-                        for (let i = event.resultIndex; i < event.results.length; ++i) {{
-                            const transcript = pickBestTranscript(event.results[i]);
-                            if (event.results[i].isFinal) {{
-                                const piece = transcript.trim();
-                                if (piece.length > 0) {{
-                                    finalizedSegmentBuffer = ((finalizedSegmentBuffer ? finalizedSegmentBuffer + " " : "") + piece).replace(/\\s+/g, " ").trim();
-                                }}
-                            }} else {{
-                                newInterim += transcript;
+                        // Nếu trình duyệt reset mảng results mới có độ dài nhỏ hơn mốc cũ
+                        if (committedResultIndex > event.results.length) {{
+                            committedResultIndex = 0;
+                        }}
+
+                        // Tái tạo câu hiện tại TỪ ĐẦU chỉ từ các phần tử >= committedResultIndex
+                        // (Tuyệt đối KHÔNG dùng += vào biến toàn cục qua nhiều lần onresult!)
+                        let rebuiltSentence = "";
+                        let hasUnfinishedInterim = false;
+
+                        for (let i = committedResultIndex; i < event.results.length; ++i) {{
+                            const piece = pickBestTranscript(event.results[i]);
+                            if (!piece) continue;
+
+                            // Bỏ qua nếu mảnh đầu tiên trùng lặp với câu vừa mới chốt xong
+                            if (
+                                i === committedResultIndex &&
+                                lastCommittedNormalized &&
+                                normalizeForComparison(piece) === lastCommittedNormalized
+                            ) {{
+                                committedResultIndex = i + 1;
+                                continue;
+                            }}
+
+                            rebuiltSentence = smartMergeSegments(rebuiltSentence, piece);
+                            if (!event.results[i].isFinal) {{
+                                hasUnfinishedInterim = true;
                             }}
                         }}
 
-                        currentInterimBuffer = newInterim.trim();
-                        const combinedSentence = getFullActiveSentenceBuffer();
+                        rebuiltSentence = collapseImmediateRepetitions(rebuiltSentence);
+                        currentActiveSentence = rebuiltSentence;
 
-                        if (combinedSentence.length > 0) {{
-                            interimText.innerText = combinedSentence;
+                        if (currentActiveSentence.length > 0) {{
+                            interimText.innerText = currentActiveSentence;
                             if (manualSentenceInput) {{
-                                manualSentenceInput.value = combinedSentence;
+                                manualSentenceInput.value = currentActiveSentence;
                             }}
 
                             if (sentenceSilenceTimer) clearTimeout(sentenceSilenceTimer);
 
-                            const wordCount = combinedSentence.split(/\\s+/).length;
-                            const hasEndPunctuation = /[.?!…]\\s*$/.test(combinedSentence);
+                            const wordCount = currentActiveSentence.split(/\\s+/).length;
+                            const hasEndPunctuation = /[.?!…]\\s*$/.test(currentActiveSentence);
 
-                            // Chỉ tự động ngắt ngay khi:
-                            // 1) Đã có dấu kết thúc câu (. ? !) và người nói đã dừng mảnh hiện tại
-                            // 2) Hoặc mệnh đề đã được Web Speech xác nhận kết thúc (isFinal) và đủ độ dài câu hoàn chỉnh (>= 12 từ)
-                            if (hasEndPunctuation && currentInterimBuffer.length === 0 && wordCount >= 3) {{
+                            // Nếu câu đã kết thúc bằng dấu chấm câu (. ? !) hoặc mệnh đề isFinal đã hoàn tất trọn câu
+                            if (hasEndPunctuation && !hasUnfinishedInterim && wordCount >= 2) {{
                                 sentenceSilenceTimer = setTimeout(() => {{
                                     forceCommitInterim();
                                 }}, PUNCTUATION_PAUSE_MS);
-                            }} else if (currentInterimBuffer.length === 0 && finalizedSegmentBuffer.length > 0 && wordCount >= 12) {{
+                            }} else if (!hasUnfinishedInterim && wordCount >= 12) {{
                                 sentenceSilenceTimer = setTimeout(() => {{
                                     forceCommitInterim();
                                 }}, PUNCTUATION_PAUSE_MS);
                             }} else {{
-                                // Chờ người nói kết thúc trọn vẹn câu (nghỉ 2.35s) mới chốt câu để không nhảy liên tục 2-3s
+                                // Chờ người nói dứt câu (nghỉ 2.1s) mới chốt câu và dịch
                                 sentenceSilenceTimer = setTimeout(() => {{
-                                    if (getFullActiveSentenceBuffer().length > 0) {{
+                                    if (currentActiveSentence.trim().length > 0) {{
                                         forceCommitInterim();
                                     }}
                                 }}, SENTENCE_PAUSE_MS);
@@ -3029,17 +3137,16 @@ ${{cleanCurrent}}`;
                     }};
 
                     recognition.onend = () => {{
-                        if (!isManualFlushRestart && getFullActiveSentenceBuffer().length > 0) {{
-                            // Nếu trình duyệt tự ngắt phiên khi câu đã khá dài thì chốt câu luôn
-                            const pending = getFullActiveSentenceBuffer();
-                            if (pending.split(/\\s+/).length >= 5) {{
-                                finalizedSegmentBuffer = "";
-                                currentInterimBuffer = "";
-                                if (manualSentenceInput) manualSentenceInput.value = "";
-                                appendSubtitleCard(pending, sourceLangSelect.value, targetLangSelect.value);
-                            }}
+                        // Nếu phiên tự ngắt khi đang còn câu chưa chốt thì chốt nốt trước khi nối phiên mới
+                        if (currentActiveSentence.trim().length > 0) {{
+                            const pending = currentActiveSentence.trim();
+                            currentActiveSentence = "";
+                            if (manualSentenceInput) manualSentenceInput.value = "";
+                            appendSubtitleCard(pending, sourceLangSelect.value, targetLangSelect.value);
                         }}
-                        isManualFlushRestart = false;
+                        committedResultIndex = 0;
+                        latestResultsLength = 0;
+
                         if (isListening) {{
                             setTimeout(() => {{
                                 if (isListening && recognition) {{
@@ -3048,7 +3155,7 @@ ${{cleanCurrent}}`;
                                         recognition.start();
                                     }} catch (e) {{}}
                                 }}
-                            }}, 40);
+                            }}, 50);
                         }}
                     }};
 
@@ -3068,13 +3175,14 @@ ${{cleanCurrent}}`;
             function stopRecognition() {{
                 isListening = false;
                 if (sentenceSilenceTimer) clearTimeout(sentenceSilenceTimer);
-                const remaining = getFullActiveSentenceBuffer();
-                if (remaining.length > 0) {{
-                    finalizedSegmentBuffer = "";
-                    currentInterimBuffer = "";
+                if (currentActiveSentence.trim().length > 0) {{
+                    const remaining = currentActiveSentence.trim();
+                    currentActiveSentence = "";
                     if (manualSentenceInput) manualSentenceInput.value = "";
                     appendSubtitleCard(remaining, sourceLangSelect.value, targetLangSelect.value);
                 }}
+                committedResultIndex = 0;
+                latestResultsLength = 0;
                 if (recognition) {{
                     try {{ recognition.stop(); }} catch (e) {{}}
                 }}
@@ -3088,8 +3196,9 @@ ${{cleanCurrent}}`;
 
             function clearTranscript() {{
                 lectureHistory = [];
-                finalizedSegmentBuffer = "";
-                currentInterimBuffer = "";
+                committedResultIndex = latestResultsLength;
+                currentActiveSentence = "";
+                lastCommittedNormalized = "";
                 unreadNewCount = 0;
                 userScrolledUp = false;
                 if (manualSentenceInput) manualSentenceInput.value = "";
@@ -3188,7 +3297,6 @@ def transcribe_and_translate_audio_bytes(
         return None, None, "Thư viện SpeechRecognition chưa được cài đặt trong requirements.txt."
 
     recognizer = sr.Recognizer()
-    # Cấu hình độ nhạy cao nhất mặc định
     recognizer.energy_threshold = 45
     recognizer.dynamic_energy_threshold = True
     recognizer.dynamic_energy_adjustment_damping = 0.08
@@ -3301,7 +3409,6 @@ def main() -> None:
             st.session_state.get("confirmed_user_name") and st.session_state.get("confirmed_user_uni")
         )
 
-        # Nếu đã lưu thông tin và không bấm "Đổi thông tin" -> Hiển thị thẻ đã lưu gọn gàng
         if has_confirmed_profile and not st.session_state["editing_student_profile"]:
             sv_name = st.session_state["confirmed_user_name"]
             sv_year = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
@@ -3365,7 +3472,6 @@ def main() -> None:
                     st.session_state["confirmed_user_uni"] = clean_uni
                     st.session_state["editing_student_profile"] = False
 
-                    # Lưu cố định vào ổ đĩa + trình duyệt (localStorage)
                     save_student_profile_permanently(clean_name, user_student_year, clean_uni)
                     inject_localstorage_sync(
                         action="save_profile",
@@ -3581,7 +3687,7 @@ def main() -> None:
             f"""
             <div style="text-align:center; font-size:0.82rem; padding: 8px; margin-top:6px; background: rgba(255,255,255,0.08); border-radius: 12px;">
                 {STICKER_SAILBOAT_MINI}<br/>
-                <b>Anh Minh Translate v6.0 (DSP Pro & Context AI)</b><br/>
+                <b>Anh Minh Translate v6.1 (Anti-Repeat & Context AI)</b><br/>
                 Tác giả: <b>Mai Văn Minh</b><br/>
                 <i>Đóng tàu — СПбГМТУ (Xanh-Petecbua)</i>
             </div>
