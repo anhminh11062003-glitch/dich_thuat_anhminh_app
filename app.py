@@ -1,5 +1,6 @@
 from array import array
 import base64
+import hashlib
 import io
 import json
 import os
@@ -32,7 +33,7 @@ except Exception:
 
 
 # ==============================================================================
-# 1. CẤU HÌNH TRANG & ẢNH CHÂN DUNG TÁC GIẢ CỐ ĐỊNH
+# 1. CẤU HÌNH TRANG, BẢO MẬT TÁC GIẢ & EMAIL THÔNG BÁO
 # ==============================================================================
 st.set_page_config(
     page_title="Anh Minh Translate | Mai Văn Minh - СПбГМТУ",
@@ -44,9 +45,25 @@ st.set_page_config(
 # Link lấy Gemini API Key chính thức từ Google AI Studio
 GEMINI_API_KEY_URL = "https://aistudio.google.com/app/apikey"
 
+# Email nhận thông báo của tác giả
+AUTHOR_NOTIFICATION_EMAIL = "anhminh11062003@gmail.com"
+
+# Mật khẩu mở khóa giao diện Tác giả (sửa app / xem Github / xem danh sách người dùng)
+# Có thể ghi đè trong Streamlit Secrets bằng khóa AUTHOR_ADMIN_PASSWORD
+DEFAULT_AUTHOR_PASSWORD = os.environ.get("AUTHOR_ADMIN_PASSWORD", "minh1106")
+
+# Tùy chọn cấu hình thêm Formspree Endpoint hoặc EmailJS (nếu để trống sẽ tự động dùng cổng trung gian FormSubmit gửi thẳng tới anhminh11062003@gmail.com)
+FORMSPREE_ENDPOINT = os.environ.get("FORMSPREE_ENDPOINT", "")  # VD: "https://formspree.io/f/xxxxxxx"
+EMAILJS_SERVICE_ID = os.environ.get("EMAILJS_SERVICE_ID", "")
+EMAILJS_TEMPLATE_ID = os.environ.get("EMAILJS_TEMPLATE_ID", "")
+EMAILJS_PUBLIC_KEY = os.environ.get("EMAILJS_PUBLIC_KEY", "")
+
+# File lưu cố định API Key và lịch sử người dùng trên ổ đĩa
+SAVED_KEYS_FILE = Path(".saved_gemini_keys.json")
+USER_LOGS_FILE = Path(".user_access_logs.json")
+
 # Nếu bạn có link ảnh trực tiếp (URL hoặc chuỗi data:image/jpeg;base64,...),
-# có thể dán vào biến dưới đây. Nếu để trống, hệ thống tự động đọc file avatar.png / avatar.jpg
-# trong cùng thư mục GitHub của bạn hoặc dùng chân dung cố định bên dưới.
+# có thể dán vào biến dưới đây.
 FIXED_AUTHOR_AVATAR_BASE64_OR_URL = ""
 
 
@@ -60,6 +77,307 @@ def clean_api_key(raw_key: str) -> str:
     if not raw_key:
         return ""
     return re.sub(r'[\s"\'\`]+', "", raw_key.strip())
+
+
+# ==============================================================================
+# 1B. QUẢN LÝ LƯU CỐ ĐỊNH GEMINI API KEY & GỬI EMAIL THÔNG BÁO NGƯỜI DÙNG
+# ==============================================================================
+def get_client_fingerprint() -> str:
+    """Tạo mã định danh trình duyệt/phiên kết nối để lưu Key cố định cho từng thiết bị."""
+    try:
+        headers = st.context.headers if hasattr(st, "context") and hasattr(st.context, "headers") else {}
+        ua = headers.get("User-Agent", "default_ua")
+        lang = headers.get("Accept-Language", "vi")
+        raw_id = f"{ua}::{lang}"
+        return hashlib.sha256(raw_id.encode("utf-8")).hexdigest()[:20]
+    except Exception:
+        return "default_device"
+
+
+def load_saved_api_key_from_store() -> str:
+    """Đọc API Key đã được người dùng đồng ý lưu cố định trước đó."""
+    # 1. Kiểm tra trên query params (khi JS localStorage tự động đồng bộ lên)
+    try:
+        qp_key = st.query_params.get("saved_gkey", "")
+        if qp_key:
+            return clean_api_key(qp_key)
+    except Exception:
+        pass
+
+    # 2. Kiểm tra trong file lưu cố định theo thiết bị
+    fp = get_client_fingerprint()
+    if SAVED_KEYS_FILE.exists():
+        try:
+            data = json.loads(SAVED_KEYS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return clean_api_key(data.get(fp, data.get("default", "")))
+        except Exception:
+            pass
+    return ""
+
+
+def save_api_key_permanently(api_key: str) -> None:
+    """Lưu cố định API Key vào ổ đĩa và đồng bộ với localStorage của trình duyệt."""
+    clean_k = clean_api_key(api_key)
+    fp = get_client_fingerprint()
+    data = {}
+    if SAVED_KEYS_FILE.exists():
+        try:
+            data = json.loads(SAVED_KEYS_FILE.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = {}
+    data[fp] = clean_k
+    data["default"] = clean_k
+    try:
+        SAVED_KEYS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def delete_saved_api_key() -> None:
+    """Xóa API Key đã lưu cố định khi người dùng muốn đổi hoặc gỡ Key."""
+    fp = get_client_fingerprint()
+    if SAVED_KEYS_FILE.exists():
+        try:
+            data = json.loads(SAVED_KEYS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.pop(fp, None)
+                data.pop("default", None)
+                SAVED_KEYS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+    try:
+        if "saved_gkey" in st.query_params:
+            del st.query_params["saved_gkey"]
+    except Exception:
+        pass
+
+
+def inject_localstorage_key_sync(action: str = "load", key_to_save: str = "") -> None:
+    """
+    Đồng bộ Gemini API Key với localStorage trên trình duyệt của người dùng
+    để kể cả khi server Streamlit khởi động lại thì trình duyệt vẫn tự nạp lại Key.
+    """
+    safe_key = json.dumps(clean_api_key(key_to_save))
+    if action == "save":
+        components.html(
+            f"""
+            <script>
+            try {{
+                localStorage.setItem("anhminh_saved_gemini_key", {safe_key});
+                localStorage.setItem("anhminh_key_decision", "saved");
+            }} catch (e) {{}}
+            </script>
+            """,
+            height=0,
+        )
+    elif action == "delete":
+        components.html(
+            """
+            <script>
+            try {
+                localStorage.removeItem("anhminh_saved_gemini_key");
+                localStorage.removeItem("anhminh_key_decision");
+                const url = new URL(window.parent.location.href);
+                if (url.searchParams.has("saved_gkey")) {
+                    url.searchParams.delete("saved_gkey");
+                    window.parent.history.replaceState({}, "", url.toString());
+                }
+            } catch (e) {}
+            </script>
+            """,
+            height=0,
+        )
+    else:
+        components.html(
+            """
+            <script>
+            try {
+                const savedKey = localStorage.getItem("anhminh_saved_gemini_key");
+                if (savedKey && savedKey.trim().length > 10) {
+                    const url = new URL(window.parent.location.href);
+                    if (url.searchParams.get("saved_gkey") !== savedKey.trim()) {
+                        url.searchParams.set("saved_gkey", savedKey.trim());
+                        window.parent.location.replace(url.toString());
+                    }
+                }
+            } catch (e) {}
+            </script>
+            """,
+            height=0,
+        )
+
+
+def log_user_locally(full_name: str, student_year: str, university: str) -> None:
+    """Lưu danh sách người dùng vào file log để tác giả có thể kiểm tra bất cứ lúc nào."""
+    logs = []
+    if USER_LOGS_FILE.exists():
+        try:
+            logs = json.loads(USER_LOGS_FILE.read_text(encoding="utf-8"))
+            if not isinstance(logs, list):
+                logs = []
+        except Exception:
+            logs = []
+    logs.insert(
+        0,
+        {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "full_name": full_name,
+            "student_year": student_year,
+            "university": university,
+        },
+    )
+    try:
+        USER_LOGS_FILE.write_text(json.dumps(logs[:200], ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def send_user_notification_email(full_name: str, student_year: str, university: str) -> Tuple[bool, str]:
+    """
+    Gửi thông báo người dùng mới về email tác giả (anhminh11062003@gmail.com)
+    thông qua dịch vụ trung gian (Formspree / EmailJS / FormSubmit Ajax).
+    """
+    now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    log_user_locally(full_name, student_year, university)
+
+    headers_json = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+
+    # Cách 1: Nếu có cấu hình Formspree Endpoint
+    formspree_url = FORMSPREE_ENDPOINT.strip()
+    try:
+        if not formspree_url and "FORMSPREE_ENDPOINT" in st.secrets:
+            formspree_url = str(st.secrets["FORMSPREE_ENDPOINT"]).strip()
+    except Exception:
+        pass
+
+    if formspree_url:
+        try:
+            payload = {
+                "_subject": f"[Anh Minh Translate] Sinh viên mới: {full_name}",
+                "Họ và tên": full_name,
+                "Sinh viên năm": student_year,
+                "Trường đại học": university,
+                "Thời gian truy cập": now_str,
+                "Email nhận": AUTHOR_NOTIFICATION_EMAIL,
+            }
+            req = urllib.request.Request(
+                formspree_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers_json,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                if resp.status in (200, 201, 202):
+                    return True, "Formspree"
+        except Exception:
+            pass
+
+    # Cách 2: Nếu có cấu hình EmailJS REST API
+    ejs_service = EMAILJS_SERVICE_ID.strip()
+    ejs_template = EMAILJS_TEMPLATE_ID.strip()
+    ejs_pubkey = EMAILJS_PUBLIC_KEY.strip()
+    if ejs_service and ejs_template and ejs_pubkey:
+        try:
+            ejs_payload = {
+                "service_id": ejs_service,
+                "template_id": ejs_template,
+                "user_id": ejs_pubkey,
+                "template_params": {
+                    "to_email": AUTHOR_NOTIFICATION_EMAIL,
+                    "user_name": full_name,
+                    "student_year": student_year,
+                    "university": university,
+                    "access_time": now_str,
+                },
+            }
+            req = urllib.request.Request(
+                "https://api.emailjs.com/api/v1.0/email/send",
+                data=json.dumps(ejs_payload).encode("utf-8"),
+                headers=headers_json,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                if resp.status in (200, 201):
+                    return True, "EmailJS"
+        except Exception:
+            pass
+
+    # Cách 3: Dịch vụ trung gian FormSubmit Ajax API (Gửi thẳng tới anhminh11062003@gmail.com không cần cấu hình trước)
+    try:
+        formsubmit_url = f"https://formsubmit.co/ajax/{AUTHOR_NOTIFICATION_EMAIL}"
+        payload_fs = {
+            "_subject": f"🚢 [Anh Minh Translate] Người dùng mới: {full_name}",
+            "_template": "table",
+            "_captcha": "false",
+            "Ho_va_Ten": full_name,
+            "Sinh_vien_nam": student_year,
+            "Truong_theo_hoc": university,
+            "Thoi_gian": now_str,
+            "Ung_dung": "Anh Minh Translate (СПбГМТУ)",
+        }
+        req_fs = urllib.request.Request(
+            formsubmit_url,
+            data=json.dumps(payload_fs).encode("utf-8"),
+            headers=headers_json,
+            method="POST",
+        )
+        with urllib.request.urlopen(req_fs, timeout=8) as resp:
+            if resp.status in (200, 201):
+                return True, "FormSubmit Relay"
+    except Exception:
+        pass
+
+    return False, "Local Saved"
+
+
+def trigger_client_side_email_relay(full_name: str, student_year: str, university: str) -> None:
+    """
+    Gửi song song từ trình duyệt của người dùng (Client-side Fetch) qua cổng trung gian
+    để đảm bảo 100% thông báo được chuyển đi ngay cả khi IP Server bị giới hạn.
+    """
+    now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    safe_payload = json.dumps(
+        {
+            "_subject": f"🚢 [Anh Minh Translate] Sinh viên sử dụng: {full_name}",
+            "_template": "table",
+            "_captcha": "false",
+            "Họ và tên": full_name,
+            "Sinh viên năm": student_year,
+            "Trường đại học": university,
+            "Thời gian": now_str,
+        }
+    )
+    safe_formspree = json.dumps(FORMSPREE_ENDPOINT.strip())
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const payload = {safe_payload};
+            const formspreeUrl = {safe_formspree};
+            if (formspreeUrl) {{
+                fetch(formspreeUrl, {{
+                    method: "POST",
+                    headers: {{ "Content-Type": "application/json", "Accept": "application/json" }},
+                    body: JSON.stringify(payload)
+                }}).catch(() => {{}});
+            }}
+            fetch("https://formsubmit.co/ajax/{AUTHOR_NOTIFICATION_EMAIL}", {{
+                method: "POST",
+                headers: {{ "Content-Type": "application/json", "Accept": "application/json" }},
+                body: JSON.stringify(payload)
+            }}).catch(() => {{}});
+        }})();
+        </script>
+        """,
+        height=0,
+    )
 
 
 def get_fixed_author_portrait_svg_uri() -> str:
@@ -447,15 +765,42 @@ STICKER_ANCHOR_3D = """
 
 
 # ==============================================================================
-# 4. CUSTOM CSS CHUYÊN NGHIỆP + TỐI ƯU GIAO DIỆN ĐIỆN THOẠI (MOBILE-FIRST)
+# 4. CUSTOM CSS CHUYÊN NGHIỆP + ẨN NÚT SỬA APP/GITHUB ĐỐI VỚI NGƯỜI DÙNG THƯỜNG
 # ==============================================================================
-def inject_ocean_blue_css() -> None:
-    render_html(
+def inject_ocean_blue_css(is_author_admin: bool = False) -> None:
+    # Nếu KHÔNG phải tác giả đang mở khóa -> Ẩn toàn bộ nút Fork, Github, Manage App, Deploy, MainMenu
+    hide_github_and_edit_css = ""
+    if not is_author_admin:
+        hide_github_and_edit_css = """
+        /* Ẩn các nút Fork, GitHub, Sửa App, Deploy, Menu 3 chấm đối với người dùng thường */
+        /* Giữ lại nút đóng/mở thanh Sidebar bên trái */
+        [data-testid="stToolbarActions"],
+        [data-testid="stAppDeployButton"],
+        .stAppDeployButton,
+        [data-testid="stMainMenu"],
+        #MainMenu,
+        [data-testid="manage-app-button"],
+        .viewerBadge_container__r5tak,
+        .viewerBadge_link__qRIco,
+        .styles_viewerBadge__CvC9N,
+        a[href*="github.com"],
+        button[title="View app source on GitHub"],
+        footer {
+            display: none !important;
+            visibility: hidden !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
         """
+
+    render_html(
+        f"""
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@500;600&display=swap');
 
-        :root {
+        {hide_github_and_edit_css}
+
+        :root {{
             --ocean-primary: #0284C7;
             --ocean-secondary: #0369A1;
             --ocean-accent: #06B6D4;
@@ -465,20 +810,20 @@ def inject_ocean_blue_css() -> None:
             --ocean-muted: #334155;
             --ocean-border: #BAE6FD;
             color-scheme: light !important;
-        }
+        }}
 
         html, body, .stApp, div, p, label, h1, h2, h3, h4, h5, h6, button, input, textarea, table,
-        span:not([data-testid="stIconMaterial"]):not(.material-icons) {
+        span:not([data-testid="stIconMaterial"]):not(.material-icons) {{
             font-family: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-        }
+        }}
 
-        span[data-testid="stIconMaterial"], .material-icons {
+        span[data-testid="stIconMaterial"], .material-icons {{
             font-family: 'Material Symbols Rounded', 'Material Icons' !important;
             font-weight: normal !important;
             font-style: normal !important;
-        }
+        }}
 
-        .stApp {
+        .stApp {{
             background-color: #F0F9FF !important;
             background-image:
                 radial-gradient(at 12% 15%, rgba(6, 182, 212, 0.12) 0px, transparent 50%),
@@ -487,11 +832,11 @@ def inject_ocean_blue_css() -> None:
                 linear-gradient(to bottom, rgba(186, 230, 253, 0.35) 1px, transparent 1px) !important;
             background-size: 100% 100%, 100% 100%, 36px 36px, 36px 36px !important;
             color: #0F172A !important;
-        }
+        }}
 
-        .main .block-container {
+        .main .block-container {{
             padding-top: 1.5rem !important;
-        }
+        }}
 
         .main .block-container label,
         .main .block-container p,
@@ -501,15 +846,15 @@ def inject_ocean_blue_css() -> None:
         .main .block-container h4,
         .main .block-container h5,
         div[data-testid="stWidgetLabel"] p,
-        div[data-testid="stMarkdownContainer"] p {
+        div[data-testid="stMarkdownContainer"] p {{
             color: #0C4A6E !important;
             font-weight: 600 !important;
-        }
+        }}
 
         div[data-testid="stTextArea"] textarea,
         div[data-baseweb="textarea"] textarea,
         div[data-baseweb="base-input"] textarea,
-        .main input[type="text"] {
+        .main input[type="text"] {{
             background-color: #FFFFFF !important;
             color: #0F172A !important;
             -webkit-text-fill-color: #0F172A !important;
@@ -521,85 +866,85 @@ def inject_ocean_blue_css() -> None:
             font-weight: 500 !important;
             padding: 14px 16px !important;
             box-shadow: inset 0 2px 6px rgba(2, 132, 199, 0.06), 0 4px 12px rgba(2, 132, 199, 0.06) !important;
-        }
+        }}
         div[data-testid="stTextArea"] textarea:focus,
-        div[data-baseweb="textarea"] textarea:focus {
+        div[data-baseweb="textarea"] textarea:focus {{
             border-color: #0284C7 !important;
             box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.2) !important;
             background-color: #FFFFFF !important;
-        }
-        div[data-testid="stTextArea"] textarea::placeholder {
+        }}
+        div[data-testid="stTextArea"] textarea::placeholder {{
             color: #64748B !important;
             -webkit-text-fill-color: #64748B !important;
             opacity: 1 !important;
-        }
+        }}
 
-        .main div[data-baseweb="select"] > div {
+        .main div[data-baseweb="select"] > div {{
             background-color: #FFFFFF !important;
             color: #0F172A !important;
             border: 2px solid #7DD3FC !important;
             border-radius: 12px !important;
             font-weight: 600 !important;
             box-shadow: 0 4px 10px rgba(2, 132, 199, 0.06) !important;
-        }
+        }}
         .main div[data-baseweb="select"] span,
-        .main div[data-baseweb="select"] div {
+        .main div[data-baseweb="select"] div {{
             color: #0C4A6E !important;
-        }
+        }}
         ul[data-testid="stSelectboxVirtualDropdown"],
         div[data-baseweb="popover"] ul,
-        div[data-baseweb="menu"] {
+        div[data-baseweb="menu"] {{
             background-color: #FFFFFF !important;
             border: 1px solid #7DD3FC !important;
             border-radius: 12px !important;
-        }
+        }}
         div[data-baseweb="popover"] li,
-        div[data-baseweb="menu"] li {
+        div[data-baseweb="menu"] li {{
             color: #0F172A !important;
             font-weight: 500 !important;
-        }
-        div[data-baseweb="popover"] li:hover {
+        }}
+        div[data-baseweb="popover"] li:hover {{
             background-color: #E0F2FE !important;
             color: #0284C7 !important;
-        }
+        }}
 
-        div[data-testid="stTabs"] div[role="tablist"] {
+        div[data-testid="stTabs"] div[role="tablist"] {{
             gap: 10px;
             border-bottom: 2px solid #BAE6FD !important;
             padding-bottom: 6px;
             flex-wrap: wrap;
-        }
-        div[data-testid="stTabs"] button[data-baseweb="tab"] {
+        }}
+        div[data-testid="stTabs"] button[data-baseweb="tab"] {{
             background-color: #FFFFFF !important;
             border-radius: 14px 14px 4px 4px !important;
             padding: 12px 20px !important;
             border: 2px solid #7DD3FC !important;
             transition: all 0.2s ease !important;
             box-shadow: 0 4px 10px rgba(2, 132, 199, 0.07) !important;
-        }
+        }}
         div[data-testid="stTabs"] button[data-baseweb="tab"] p,
         div[data-testid="stTabs"] button[data-baseweb="tab"] span,
-        div[data-testid="stTabs"] button[data-baseweb="tab"] div {
+        div[data-testid="stTabs"] button[data-baseweb="tab"] div {{
             color: #0369A1 !important;
             font-weight: 700 !important;
             font-size: 0.96rem !important;
-        }
-        div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
+        }}
+        div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {{
             background: linear-gradient(135deg, #0284C7 0%, #0369A1 100%) !important;
             border-color: #0369A1 !important;
             box-shadow: 0 8px 20px rgba(2, 132, 199, 0.28) !important;
-        }
+        }}
         div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] p,
         div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] span,
-        div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] div {
+        div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] div {{
             color: #FFFFFF !important;
-        }
+        }}
 
         /* SIDEBAR */
-        section[data-testid="stSidebar"] {
+        section[data-testid="stSidebar"] {{
             background: linear-gradient(180deg, #061E33 0%, #0C4A6E 55%, #0369A1 100%) !important;
             border-right: 2px solid #38BDF8 !important;
-        }
+        }}
         section[data-testid="stSidebar"] p,
         section[data-testid="stSidebar"] label,
         section[data-testid="stSidebar"] h1,
@@ -607,55 +952,55 @@ def inject_ocean_blue_css() -> None:
         section[data-testid="stSidebar"] h3,
         section[data-testid="stSidebar"] span,
         section[data-testid="stSidebar"] li,
-        section[data-testid="stSidebar"] small {
+        section[data-testid="stSidebar"] small {{
             color: #F0F9FF !important;
-        }
+        }}
         section[data-testid="stSidebar"] .stTextInput div[data-baseweb="input"],
-        section[data-testid="stSidebar"] .stTextInput div[data-baseweb="base-input"] {
+        section[data-testid="stSidebar"] .stTextInput div[data-baseweb="base-input"] {{
             background-color: #FFFFFF !important;
             border: 2px solid #38BDF8 !important;
             border-radius: 10px !important;
-        }
-        section[data-testid="stSidebar"] .stTextInput input {
+        }}
+        section[data-testid="stSidebar"] .stTextInput input {{
             background-color: #FFFFFF !important;
             color: #0F172A !important;
             -webkit-text-fill-color: #0F172A !important;
             border: none !important;
             font-weight: 600 !important;
-        }
-        section[data-testid="stSidebar"] .stTextInput button {
+        }}
+        section[data-testid="stSidebar"] .stTextInput button {{
             background-color: #FFFFFF !important;
             color: #0369A1 !important;
             border: none !important;
-        }
+        }}
         section[data-testid="stSidebar"] .stTextInput button span,
-        section[data-testid="stSidebar"] .stTextInput button svg {
+        section[data-testid="stSidebar"] .stTextInput button svg {{
             color: #0369A1 !important;
             fill: #0369A1 !important;
-        }
-        section[data-testid="stSidebar"] .stTextInput input::placeholder {
+        }}
+        section[data-testid="stSidebar"] .stTextInput input::placeholder {{
             color: #64748B !important;
             -webkit-text-fill-color: #64748B !important;
-        }
-        section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
+        }}
+        section[data-testid="stSidebar"] div[data-baseweb="select"] > div {{
             background-color: #FFFFFF !important;
             border: 2px solid #38BDF8 !important;
             border-radius: 10px !important;
-        }
+        }}
         section[data-testid="stSidebar"] div[data-baseweb="select"] span,
-        section[data-testid="stSidebar"] div[data-baseweb="select"] div {
+        section[data-testid="stSidebar"] div[data-baseweb="select"] div {{
             color: #0F172A !important;
             font-weight: 700 !important;
-        }
-        section[data-testid="stSidebar"] details {
+        }}
+        section[data-testid="stSidebar"] details {{
             background: rgba(255, 255, 255, 0.1) !important;
             border: 1px solid rgba(186, 230, 253, 0.35) !important;
             border-radius: 10px !important;
             margin-bottom: 6px !important;
-        }
+        }}
 
         /* NÚT LẤY GEMINI API KEY CHUYỂN TAB MỚI */
-        .gemini-key-link-btn {
+        .gemini-key-link-btn {{
             display: flex;
             align-items: center;
             justify-content: center;
@@ -674,27 +1019,27 @@ def inject_ocean_blue_css() -> None:
             margin-bottom: 10px;
             transition: all 0.2s ease;
             text-align: center;
-        }
-        .gemini-key-link-btn:hover {
+        }}
+        .gemini-key-link-btn:hover {{
             background: linear-gradient(135deg, #06B6D4 0%, #0369A1 100%);
             transform: translateY(-1px);
             box-shadow: 0 6px 16px rgba(6, 182, 212, 0.45);
-        }
+        }}
 
         /* THẺ GIỚI THIỆU TÁC GIẢ CỐ ĐỊNH Ở SIDEBAR */
-        .author-sidebar-card {
+        .author-sidebar-card {{
             background: linear-gradient(145deg, rgba(255, 255, 255, 0.16) 0%, rgba(14, 116, 144, 0.35) 100%);
             border: 1.5px solid rgba(125, 211, 252, 0.6);
             border-radius: 18px;
             padding: 14px;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
             display: flex;
             align-items: center;
             gap: 13px;
             box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
             backdrop-filter: blur(8px);
-        }
-        .author-avatar-img {
+        }}
+        .author-avatar-img {{
             width: 68px;
             height: 68px;
             border-radius: 50%;
@@ -703,21 +1048,21 @@ def inject_ocean_blue_css() -> None:
             box-shadow: 0 4px 12px rgba(56, 189, 248, 0.45);
             background: #FFFFFF;
             flex-shrink: 0;
-        }
-        .author-info-name {
+        }}
+        .author-info-name {{
             font-size: 1.05rem;
             font-weight: 800;
             color: #FFFFFF !important;
             line-height: 1.25;
             margin-bottom: 3px;
-        }
-        .author-info-role {
+        }}
+        .author-info-role {{
             font-size: 0.78rem;
             font-weight: 600;
             color: #BAE6FD !important;
             line-height: 1.38;
-        }
-        .author-uni-badge {
+        }}
+        .author-uni-badge {{
             display: inline-block;
             margin-top: 5px;
             padding: 2px 8px;
@@ -727,10 +1072,20 @@ def inject_ocean_blue_css() -> None:
             font-size: 0.72rem;
             font-weight: 700;
             color: #E0F2FE !important;
-        }
+        }}
+
+        /* KHUNG THÔNG TIN NGƯỜI DÙNG Ở SIDEBAR (DƯỚI TÁC GIẢ) */
+        .user-checkin-card {{
+            background: linear-gradient(145deg, rgba(14, 116, 144, 0.4) 0%, rgba(8, 47, 73, 0.65) 100%);
+            border: 1.5px solid #38BDF8;
+            border-radius: 16px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+        }}
 
         /* THẺ TÁC GIẢ GÓC TRÁI TRÊN CÙNG BANNER CHÍNH */
-        .author-hero-box {
+        .author-hero-box {{
             display: flex;
             align-items: center;
             gap: 14px;
@@ -741,8 +1096,8 @@ def inject_ocean_blue_css() -> None:
             backdrop-filter: blur(10px);
             box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
             max-width: 390px;
-        }
-        .author-hero-avatar {
+        }}
+        .author-hero-avatar {{
             width: 74px;
             height: 74px;
             border-radius: 16px;
@@ -751,10 +1106,10 @@ def inject_ocean_blue_css() -> None:
             background: #FFFFFF;
             flex-shrink: 0;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-        }
+        }}
 
         /* HEADER BANNER NGHỆ THUẬT HÀNG HẢI */
-        .am-hero-banner {
+        .am-hero-banner {{
             background: linear-gradient(130deg, #082F49 0%, #0369A1 45%, #0284C7 80%, #06B6D4 100%);
             border-radius: 24px;
             padding: 22px 28px;
@@ -764,8 +1119,8 @@ def inject_ocean_blue_css() -> None:
             position: relative;
             overflow: hidden;
             border: 2px solid rgba(125, 211, 252, 0.45);
-        }
-        .am-brand-row {
+        }}
+        .am-brand-row {{
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -773,40 +1128,40 @@ def inject_ocean_blue_css() -> None:
             gap: 20px;
             position: relative;
             z-index: 2;
-        }
-        .am-brand-left {
+        }}
+        .am-brand-left {{
             display: flex;
             align-items: center;
             gap: 22px;
             flex: 1;
             flex-wrap: wrap;
             min-width: 280px;
-        }
-        .am-title {
+        }}
+        .am-title {{
             font-size: 1.95rem !important;
             font-weight: 800 !important;
             letter-spacing: -0.02em;
             margin: 0 !important;
             line-height: 1.2 !important;
             color: #FFFFFF !important;
-        }
-        .am-title span.highlight {
+        }}
+        .am-title span.highlight {{
             color: #7DD3FC !important;
             text-shadow: 0 2px 10px rgba(6, 182, 212, 0.4);
-        }
-        .am-subtitle {
+        }}
+        .am-subtitle {{
             font-size: 0.96rem !important;
             color: #E0F2FE !important;
             margin-top: 5px !important;
             font-weight: 500 !important;
-        }
-        .am-badges {
+        }}
+        .am-badges {{
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
             margin-top: 10px;
-        }
-        .am-badge {
+        }}
+        .am-badge {{
             background: rgba(255, 255, 255, 0.16);
             border: 1px solid rgba(255, 255, 255, 0.38);
             padding: 5px 12px;
@@ -815,16 +1170,16 @@ def inject_ocean_blue_css() -> None:
             font-weight: 600;
             color: #FFFFFF !important;
             backdrop-filter: blur(4px);
-        }
-        .am-ship-art {
+        }}
+        .am-ship-art {{
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-        }
+        }}
 
         /* THẺ CARD KHOA HỌC */
-        .ocean-card {
+        .ocean-card {{
             background: rgba(255, 255, 255, 0.96);
             border-radius: 20px;
             padding: 22px 26px;
@@ -833,8 +1188,8 @@ def inject_ocean_blue_css() -> None:
             margin-bottom: 20px;
             position: relative;
             overflow: hidden;
-        }
-        .ocean-card-header {
+        }}
+        .ocean-card-header {{
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -843,16 +1198,16 @@ def inject_ocean_blue_css() -> None:
             margin-bottom: 16px;
             flex-wrap: wrap;
             gap: 10px;
-        }
-        .ocean-card-title {
+        }}
+        .ocean-card-title {{
             font-size: 1.12rem !important;
             font-weight: 800 !important;
             color: #0369A1 !important;
             display: flex;
             align-items: center;
             gap: 10px;
-        }
-        .ocean-pill {
+        }}
+        .ocean-pill {{
             background: linear-gradient(135deg, #E0F2FE 0%, #CFFAFE 100%);
             color: #0369A1 !important;
             font-size: 0.78rem;
@@ -860,8 +1215,8 @@ def inject_ocean_blue_css() -> None:
             padding: 5px 14px;
             border-radius: 999px;
             border: 1px solid #7DD3FC;
-        }
-        .translation-main-text {
+        }}
+        .translation-main-text {{
             font-size: 1.14rem !important;
             line-height: 1.72 !important;
             color: #0F172A !important;
@@ -872,9 +1227,9 @@ def inject_ocean_blue_css() -> None:
             border: 1px solid #E2E8F0;
             border-left: 6px solid #0284C7;
             white-space: pre-wrap;
-        }
+        }}
 
-        .lang-card-header {
+        .lang-card-header {{
             font-size: 0.96rem !important;
             font-weight: 800 !important;
             color: #0C4A6E !important;
@@ -882,8 +1237,8 @@ def inject_ocean_blue_css() -> None:
             display: flex;
             align-items: center;
             gap: 6px;
-        }
-        .lang-compare-box-ru {
+        }}
+        .lang-compare-box-ru {{
             background: #FFFFFF;
             border: 1.5px solid #93C5FD;
             border-top: 5px solid #0284C7;
@@ -897,8 +1252,8 @@ def inject_ocean_blue_css() -> None:
             min-height: 90px;
             box-shadow: 0 4px 12px rgba(2, 132, 199, 0.06);
             white-space: pre-wrap;
-        }
-        .lang-compare-box-vi {
+        }}
+        .lang-compare-box-vi {{
             background: #FFFFFF;
             border: 1.5px solid #6EE7B7;
             border-top: 5px solid #059669;
@@ -912,8 +1267,8 @@ def inject_ocean_blue_css() -> None:
             min-height: 90px;
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.06);
             white-space: pre-wrap;
-        }
-        .lang-compare-box-en {
+        }}
+        .lang-compare-box-en {{
             background: #FFFFFF;
             border: 1.5px solid #FCD34D;
             border-top: 5px solid #D97706;
@@ -927,72 +1282,72 @@ def inject_ocean_blue_css() -> None:
             min-height: 90px;
             box-shadow: 0 4px 12px rgba(217, 119, 6, 0.06);
             white-space: pre-wrap;
-        }
+        }}
 
-        .tone-box-formal {
+        .tone-box-formal {{
             background: linear-gradient(135deg, #F0F9FF 0%, #E0F2FE 100%);
             border: 1.5px solid #7DD3FC;
             border-left: 6px solid #0369A1;
             border-radius: 14px;
             padding: 16px 18px;
             margin-bottom: 8px;
-        }
-        .tone-box-casual {
+        }}
+        .tone-box-casual {{
             background: linear-gradient(135deg, #ECFEFF 0%, #CFFAFE 100%);
             border: 1.5px solid #67E8F9;
             border-left: 6px solid #06B6D4;
             border-radius: 14px;
             padding: 16px 18px;
             margin-bottom: 8px;
-        }
-        .tone-title {
+        }}
+        .tone-title {{
             font-weight: 800;
             font-size: 0.96rem;
             color: #0C4A6E !important;
             margin-bottom: 8px;
-        }
-        .tone-ru {
+        }}
+        .tone-ru {{
             font-size: 1.1rem;
             font-weight: 700;
             color: #0F172A !important;
             margin-bottom: 8px;
             line-height: 1.55;
-        }
-        .tone-note {
+        }}
+        .tone-note {{
             font-size: 0.88rem;
             color: #334155 !important;
             line-height: 1.5;
-        }
+        }}
 
-        .vocab-table {
+        .vocab-table {{
             width: 100%;
             border-collapse: collapse;
             margin-top: 8px;
             font-size: 0.96rem;
             border-radius: 12px;
             overflow: hidden;
-        }
-        .vocab-table th {
+        }}
+        .vocab-table th {{
             background: linear-gradient(90deg, #0369A1 0%, #0284C7 100%);
             color: #FFFFFF !important;
             text-align: left;
             padding: 12px 16px;
             font-weight: 700;
-        }
-        .vocab-table td {
+        }}
+        .vocab-table td {{
             padding: 12px 16px;
             border-bottom: 1px solid #E2E8F0;
             color: #0F172A !important;
             font-weight: 500;
-        }
-        .vocab-table tr:nth-child(even) {
+        }}
+        .vocab-table tr:nth-child(even) {{
             background-color: #F0F9FF;
-        }
-        .vocab-table tr:hover {
+        }}
+        .vocab-table tr:hover {{
             background-color: #E0F2FE;
-        }
+        }}
 
-        div.stButton > button[kind="primary"] {
+        div.stButton > button[kind="primary"] {{
             background: linear-gradient(135deg, #0284C7 0%, #0369A1 100%) !important;
             color: #FFFFFF !important;
             border: none !important;
@@ -1001,39 +1356,39 @@ def inject_ocean_blue_css() -> None:
             font-weight: 700 !important;
             font-size: 0.98rem !important;
             box-shadow: 0 8px 18px rgba(2, 132, 199, 0.28) !important;
-        }
+        }}
         div.stButton > button[kind="primary"] p,
-        div.stButton > button[kind="primary"] span {
+        div.stButton > button[kind="primary"] span {{
             color: #FFFFFF !important;
-        }
-        div.stButton > button[kind="secondary"] {
+        }}
+        div.stButton > button[kind="secondary"] {{
             border-radius: 12px !important;
             border: 2px solid #38BDF8 !important;
             background-color: #FFFFFF !important;
             color: #0369A1 !important;
             padding: 0.55rem 1.1rem !important;
             font-weight: 700 !important;
-        }
+        }}
         div.stButton > button[kind="secondary"] p,
-        div.stButton > button[kind="secondary"] span {
+        div.stButton > button[kind="secondary"] span {{
             color: #0369A1 !important;
-        }
+        }}
 
-        .slang-item {
+        .slang-item {{
             background: #F0F9FF;
             border: 1.5px solid #BAE6FD;
             border-radius: 12px;
             padding: 12px 16px;
             margin-bottom: 10px;
             color: #0F172A !important;
-        }
-        .slang-word {
+        }}
+        .slang-word {{
             font-weight: 800;
             color: #0284C7 !important;
             font-size: 1.04rem;
-        }
+        }}
 
-        .nautical-divider {
+        .nautical-divider {{
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1045,53 +1400,53 @@ def inject_ocean_blue_css() -> None:
             letter-spacing: 0.08em;
             text-transform: uppercase;
             text-align: center;
-        }
+        }}
         .nautical-divider::before,
-        .nautical-divider::after {
+        .nautical-divider::after {{
             content: "";
             flex: 1;
             height: 1.5px;
             background: linear-gradient(90deg, transparent, #7DD3FC, transparent);
-        }
+        }}
 
         /* TỐI ƯU RESPONSIVE CHO ĐIỆN THOẠI DI ĐỘNG */
-        @media (max-width: 768px) {
-            .main .block-container {
+        @media (max-width: 768px) {{
+            .main .block-container {{
                 padding-left: 0.8rem !important;
                 padding-right: 0.8rem !important;
                 padding-top: 1rem !important;
-            }
-            .am-hero-banner {
+            }}
+            .am-hero-banner {{
                 padding: 16px 14px !important;
                 border-radius: 18px !important;
-            }
-            .am-title {
+            }}
+            .am-title {{
                 font-size: 1.45rem !important;
-            }
-            .author-hero-box {
+            }}
+            .author-hero-box {{
                 max-width: 100% !important;
                 width: 100% !important;
                 padding: 10px 12px !important;
-            }
-            .am-ship-art {
+            }}
+            .am-ship-art {{
                 display: none !important;
-            }
-            .ocean-card {
+            }}
+            .ocean-card {{
                 padding: 15px 14px !important;
                 border-radius: 16px !important;
-            }
-            div[data-testid="stTabs"] button[data-baseweb="tab"] {
+            }}
+            div[data-testid="stTabs"] button[data-baseweb="tab"] {{
                 padding: 10px 12px !important;
                 flex: 1 1 auto !important;
-            }
-            div[data-testid="stTabs"] button[data-baseweb="tab"] p {
+            }}
+            div[data-testid="stTabs"] button[data-baseweb="tab"] p {{
                 font-size: 0.84rem !important;
-            }
-            .vocab-table th, .vocab-table td {
+            }}
+            .vocab-table th, .vocab-table td {{
                 padding: 8px 10px !important;
                 font-size: 0.85rem !important;
-            }
-        }
+            }}
+        }}
         </style>
         """
     )
@@ -1175,7 +1530,7 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
     }
     post_body = urllib.parse.urlencode({"sl": src, "tl": tgt, "q": cleaned}).encode("utf-8")
 
-    # Cổng 1: Google Translate GTX qua phương thức POST (chịu tải văn bản dài cực tốt)
+    # Cổng 1: Google Translate GTX qua phương thức POST
     try:
         url1 = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t"
         req1 = urllib.request.Request(url1, data=post_body, headers=headers_form, method="POST")
@@ -1188,7 +1543,7 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
     except Exception:
         pass
 
-    # Cổng 2: Google Translate Android App Endpoint (dj=1 trả về JSON sentences siêu sạch, quota riêng)
+    # Cổng 2: Google Translate Android App Endpoint
     try:
         url2 = "https://translate.google.com/translate_a/single?client=at&dt=t&dj=1"
         req2 = urllib.request.Request(url2, data=post_body, headers=headers_form, method="POST")
@@ -1202,7 +1557,7 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
     except Exception:
         pass
 
-    # Cổng 3: Chrome Extension Dictionary Endpoint (clients5.google.com - IP limit tách biệt)
+    # Cổng 3: Chrome Extension Dictionary Endpoint
     try:
         url3 = "https://clients5.google.com/translate_a/t?client=dict-chrome-ex"
         req3 = urllib.request.Request(url3, data=post_body, headers=headers_form, method="POST")
@@ -1232,7 +1587,7 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
     except Exception:
         pass
 
-    # Cổng 5: MyMemory API dự phòng (miễn phí, không chặn IP Cloud)
+    # Cổng 5: MyMemory API dự phòng
     try:
         src_mm = "ru" if src == "auto" else src
         mm_url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(cleaned[:480])}&langpair={src_mm}|{tgt}"
@@ -1245,7 +1600,7 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
     except Exception:
         pass
 
-    # Cổng 6: deep-translator (chỉ gọi cuối cùng nếu cả 5 cổng trên đều nghẽn)
+    # Cổng 6: deep-translator
     if GoogleTranslator is not None:
         try:
             res = GoogleTranslator(source=src, target=tgt).translate(cleaned)
@@ -1258,10 +1613,6 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
 
 
 def fast_free_translate(text: str, src: str, tgt: str) -> str:
-    """
-    Dịch thuật tốc độ cao qua 5 cổng dự phòng + Bộ nhớ đệm thông minh
-    (Chỉ lưu cache khi dịch thành công, tuyệt đối không cache lỗi).
-    """
     cleaned = text.strip()
     if not cleaned:
         return ""
@@ -1285,10 +1636,6 @@ def fast_free_translate(text: str, src: str, tgt: str) -> str:
 
 
 def discover_available_gemini_models(api_key: str) -> List[str]:
-    """
-    Tự động dò tất cả các model Gemini mà API Key của người dùng được phép gọi,
-    đồng thời sắp xếp ưu tiên các model nhanh và ổn định nhất để Key nào cũng vào được.
-    """
     clean_k = clean_api_key(api_key)
     preferred_order = [
         "gemini-2.5-flash",
@@ -1339,10 +1686,6 @@ def discover_available_gemini_models(api_key: str) -> List[str]:
 
 
 def call_gemini_rest_api(api_key: str, system_prompt: str, user_text: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Hỗ trợ MỌI Gemini API Key (thử đa model từ 2.5-flash, 2.0-flash, 1.5-flash, 1.5-pro...
-    và tự động chuyển đổi giữa JSON mode & Standard Prompt nếu model không hỗ trợ system_instruction).
-    """
     clean_k = clean_api_key(api_key)
     if not clean_k:
         return None, "Empty API Key"
@@ -1352,10 +1695,7 @@ def call_gemini_rest_api(api_key: str, system_prompt: str, user_text: str) -> Tu
 
     combined_prompt = f"{system_prompt}\n\n---\nVăn bản cần xử lý:\n{user_text}"
 
-    # Thử tối đa 6 model khác nhau để đảm bảo nếu 1 model hết quota (429) hoặc không hỗ trợ,
-    # hệ thống tự nhảy sang model tiếp theo của Key đó ngay lập tức
     for model_name in models_to_try[:6]:
-        # Chế độ 1: Gọi v1beta có JSON responseMimeType
         url_v1beta = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(clean_k)}"
         payload_json_mode = {
             "contents": [{"parts": [{"text": combined_prompt}]}],
@@ -1385,7 +1725,6 @@ def call_gemini_rest_api(api_key: str, system_prompt: str, user_text: str) -> Tu
             except Exception:
                 pass
             last_error = f"HTTP {http_err.code}: {err_body[:200]}"
-            # Nếu lỗi 400 (model cũ không hỗ trợ responseMimeType), thử gọi lại không có responseMimeType
             if http_err.code == 400 and "API_KEY_INVALID" not in err_body:
                 try:
                     payload_plain = {
@@ -1456,7 +1795,6 @@ CHỈ TRẢ VỀ đúng 1 đối tượng JSON hợp lệ (không thêm markdown
 
     try:
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text.strip(), flags=re.IGNORECASE)
-        # Trích xuất khối JSON nếu model trả kèm lời dẫn
         json_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
         if json_match:
             cleaned = json_match.group(0)
@@ -1471,10 +1809,6 @@ def fallback_smart_translate(
     direction: str,
     domain: str,
 ) -> Dict:
-    """
-    Chế độ Dịch Đa Luồng GTX Siêu Tốc (5 Cổng POST dự phòng):
-    Hoạt động mượt mà không cần API Key, không bị chặn bởi giới hạn IP của Streamlit Cloud.
-    """
     text_for_translation = source_text.strip()
     detected_slang = detect_slang_in_text(text_for_translation)
     expanded_ru_text = text_for_translation
@@ -1608,7 +1942,7 @@ def fallback_smart_translate(
 
 
 # ==============================================================================
-# 6. CUSTOM HTML/JS COMPONENT CHO REAL-TIME VOICE TRANSLATION (NÂNG CẤP ĐỘ NHẠY MIC CAO)
+# 6. CUSTOM HTML/JS COMPONENT CHO REAL-TIME VOICE TRANSLATION (SỬA TRIỆT ĐỂ NÚT CHỐT CÂU)
 # ==============================================================================
 def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: str = "") -> str:
     safe_domain = json.dumps(selected_domain)
@@ -1682,9 +2016,14 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 box-shadow: 0 6px 16px rgba(2, 132, 199, 0.3);
             }}
             .btn-flush {{
-                background: #E0F2FE;
-                color: #0369A1;
+                background: linear-gradient(135deg, #0EA5E9 0%, #0284C7 100%);
+                color: #FFFFFF;
                 border: 1.5px solid #38BDF8;
+                box-shadow: 0 4px 12px rgba(2, 132, 199, 0.25);
+            }}
+            .btn-flush:hover:not(:disabled) {{
+                background: linear-gradient(135deg, #0284C7 0%, #0369A1 100%);
+                transform: translateY(-1px);
             }}
             .btn-pause {{
                 background: #FEF3C7;
@@ -1772,16 +2111,24 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 border: 1.5px dashed #0284C7;
                 border-radius: 12px;
                 padding: 12px 16px;
-                min-height: 60px;
+                min-height: 70px;
                 display: flex;
                 flex-direction: column;
-                gap: 6px;
+                gap: 8px;
             }}
             .interim-top {{
                 display: flex;
                 align-items: center;
+                justify-content: space-between;
                 gap: 10px;
                 flex-wrap: wrap;
+            }}
+            .interim-left {{
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                flex: 1;
+                min-width: 220px;
             }}
             .interim-label {{
                 background: #0284C7;
@@ -1796,6 +2143,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 color: #0C4A6E;
                 font-size: 1.04rem;
                 font-weight: 700;
+                word-break: break-word;
             }}
             .interim-live-trans {{
                 color: #0369A1;
@@ -1804,9 +2152,27 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 padding-left: 8px;
                 border-left: 3px solid #06B6D4;
             }}
+            .manual-commit-row {{
+                display: flex;
+                gap: 8px;
+                margin-top: 4px;
+            }}
+            .manual-input {{
+                flex: 1;
+                padding: 7px 12px;
+                border-radius: 10px;
+                border: 1.5px solid #7DD3FC;
+                font-size: 0.86rem;
+                color: #0F172A;
+                background: #FFFFFF;
+                outline: none;
+            }}
+            .manual-input:focus {{
+                border-color: #0284C7;
+            }}
             .subtitle-stream {{
                 margin-top: 12px;
-                height: 330px;
+                height: 310px;
                 overflow-y: auto;
                 background: #FFFFFF;
                 border: 1.5px solid #BAE6FD;
@@ -1820,6 +2186,11 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 border-radius: 12px;
                 padding: 12px 15px;
                 margin-bottom: 12px;
+                animation: fadeInCard 0.25s ease-out;
+            }}
+            @keyframes fadeInCard {{
+                from {{ opacity: 0; transform: translateY(6px); }}
+                to {{ opacity: 1; transform: translateY(0); }}
             }}
             .sub-meta {{
                 display: flex;
@@ -1851,7 +2222,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             .empty-hint {{
                 text-align: center;
                 color: #475569;
-                padding: 55px 16px;
+                padding: 50px 16px;
                 font-size: 0.93rem;
                 line-height: 1.6;
             }}
@@ -1880,7 +2251,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     <button id="btnStart" class="rt-btn btn-start" onclick="startRecognition()">
                         🎙️ Bắt đầu nghe
                     </button>
-                    <button id="btnFlush" class="rt-btn btn-flush" onclick="forceCommitInterim()" disabled title="Chốt câu đang nói dở xuống khung phụ đề">
+                    <button id="btnFlush" class="rt-btn btn-flush" onclick="forceCommitInterim()" title="Chốt ngay câu đang nói hoặc câu trong ô nhập xuống khung phụ đề (Phím tắt: Enter)">
                         ➕ Chốt câu
                     </button>
                     <button id="btnPause" class="rt-btn btn-pause" onclick="stopRecognition()" disabled>
@@ -1915,23 +2286,34 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             <div class="rt-visualizer-row">
                 <div class="status-indicator">
                     <div id="statusDot" class="pulse-dot"></div>
-                    <span id="statusText">Sẵn sàng (Độ nhạy: Cực cao) — Nhấn "🎙️ Bắt đầu nghe" và nói vào Mic.</span>
+                    <span id="statusText">Sẵn sàng — Nhấn "🎙️ Bắt đầu nghe" và nói vào Mic, hoặc bấm "➕ Chốt câu" bất kỳ lúc nào.</span>
                 </div>
                 <canvas id="waveCanvas" width="200" height="36"></canvas>
             </div>
 
             <div class="interim-box">
                 <div class="interim-top">
-                    <span class="interim-label">⚡ BẮT ÂM TỨC THÌ</span>
-                    <span id="interimText" class="interim-text">Hãy nhấn "Bắt đầu nghe" và nói thử (kể cả giọng nói nhỏ)...</span>
+                    <div class="interim-left">
+                        <span class="interim-label">⚡ BẮT ÂM TỨC THÌ</span>
+                        <span id="interimText" class="interim-text">Hãy nhấn "Bắt đầu nghe" và nói thử...</span>
+                    </div>
                 </div>
                 <div id="interimLiveTrans" class="interim-live-trans">🌊 Bản dịch trực tiếp sẽ chạy ngay lập tức khi bạn phát âm...</div>
+                <div class="manual-commit-row">
+                    <input
+                        type="text"
+                        id="manualSentenceInput"
+                        class="manual-input"
+                        placeholder="✍️ Hoặc gõ/chỉnh sửa câu tại đây rồi bấm «➕ Chốt câu» (hoặc nhấn Enter)..."
+                        onkeydown="if(event.key === 'Enter') {{ event.preventDefault(); forceCommitInterim(); }}"
+                    />
+                </div>
             </div>
 
             <div id="subtitleStream" class="subtitle-stream">
                 <div id="emptyHint" class="empty-hint">
                     🚢 <b>Phụ đề Giảng đường Độ Nhạy Cao (Ultra-Sensitive Mic Stream)</b><br/>
-                    Đã nâng cấp bộ lọc dải tần giọng nói (85Hz–8000Hz), tăng 3 ứng viên nhận diện song song (maxAlternatives=3) và tự động nối âm không trễ (50ms) để bắt trọn mọi từ của giảng viên trên cả máy tính và điện thoại.
+                    Khi giảng viên đang nói, bạn có thể bấm nút <b>«➕ Chốt câu»</b> bất cứ lúc nào để lập tức đẩy câu đang nói xuống khung dịch bên dưới mà không cần chờ hết nhịp nghỉ.
                 </div>
             </div>
         </div>
@@ -1959,10 +2341,20 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 "матан": "математический анализ (giải tích)"
             }};
 
+            const DEFAULT_PLACEHOLDERS = [
+                "Hãy nhấn \\"Bắt đầu nghe\\" và nói thử...",
+                "...",
+                "Đã chốt câu! Đang bắt âm câu tiếp theo..."
+            ];
+
             let recognition = null;
             let isListening = false;
+            let isManualFlushRestart = false;
             let lectureHistory = [];
             let currentInterimBuffer = "";
+            let lastUncommittedSpeech = "";
+            let lastCommittedSentence = "";
+            let lastCommitTimestamp = 0;
             let autoCommitTimer = null;
             let liveTranslateTimer = null;
             let lastSpeechActivity = 0;
@@ -1981,6 +2373,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             const statusText = document.getElementById("statusText");
             const interimText = document.getElementById("interimText");
             const interimLiveTrans = document.getElementById("interimLiveTrans");
+            const manualSentenceInput = document.getElementById("manualSentenceInput");
             const subtitleStream = document.getElementById("subtitleStream");
             const btnStart = document.getElementById("btnStart");
             const btnFlush = document.getElementById("btnFlush");
@@ -2134,6 +2527,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     }});
                 }}
 
+                // Cổng 1: Google GTX
                 try {{
                     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${{srcShort}}&tl=${{tgtLang}}&dt=t&q=${{encodeURIComponent(processedText)}}`;
                     const res = await fetch(url);
@@ -2141,15 +2535,32 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     if (Array.isArray(data) && Array.isArray(data[0])) {{
                         return data[0].map(item => item[0]).join("");
                     }}
-                }} catch (err) {{
-                    return "[Đang chờ kết nối dịch tự động...]";
-                }}
-                return "...";
+                }} catch (err) {{}}
+
+                // Cổng 2: MyMemory dự phòng
+                try {{
+                    const mmUrl = `https://api.mymemory.translated.net/get?q=${{encodeURIComponent(processedText.slice(0, 450))}}&langpair=${{srcShort}}|${{tgtLang}}`;
+                    const res2 = await fetch(mmUrl);
+                    const data2 = await res2.json();
+                    if (data2 && data2.responseData && data2.responseData.translatedText) {{
+                        return data2.responseData.translatedText;
+                    }}
+                }} catch (err2) {{}}
+
+                return "[Đang chờ kết nối dịch tự động...]";
             }}
 
             function appendSubtitleCard(originalText, srcLangCode, tgtLang) {{
                 const cleanOrig = (originalText || "").trim();
                 if (!cleanOrig) return;
+
+                // Chống trùng lặp nếu cùng 1 câu bị chốt 2 lần liên tiếp trong < 1.2 giây
+                const nowMs = Date.now();
+                if (cleanOrig === lastCommittedSentence && (nowMs - lastCommitTimestamp) < 1200) {{
+                    return;
+                }}
+                lastCommittedSentence = cleanOrig;
+                lastCommitTimestamp = nowMs;
 
                 const hintEl = document.getElementById("emptyHint");
                 if (hintEl) hintEl.style.display = "none";
@@ -2186,15 +2597,58 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             }}
 
             function forceCommitInterim() {{
-                if (currentInterimBuffer.trim().length > 0) {{
-                    const textToCommit = currentInterimBuffer.trim();
+                if (autoCommitTimer) {{
+                    clearTimeout(autoCommitTimer);
+                    autoCommitTimer = null;
+                }}
+
+                // Ưu tiên 1: Nội dung người dùng gõ hoặc đang được đồng bộ trong ô manualSentenceInput
+                let candidate = (manualSentenceInput && manualSentenceInput.value ? manualSentenceInput.value.trim() : "");
+
+                // Ưu tiên 2: Bộ đệm giọng nói đang thu dở (currentInterimBuffer)
+                if (!candidate && currentInterimBuffer.trim().length > 0) {{
+                    candidate = currentInterimBuffer.trim();
+                }}
+
+                // Ưu tiên 3: Câu vừa nhận diện gần nhất chưa kịp chốt (lastUncommittedSpeech)
+                if (!candidate && lastUncommittedSpeech.trim().length > 0) {{
+                    candidate = lastUncommittedSpeech.trim();
+                }}
+
+                // Ưu tiên 4: Lấy trực tiếp từ DOM #interimText nếu không phải dòng hướng dẫn mặc định
+                if (!candidate && interimText) {{
+                    const domText = (interimText.innerText || "").trim();
+                    if (domText && !DEFAULT_PLACEHOLDERS.includes(domText) && !domText.startsWith("Hãy nhấn")) {{
+                        candidate = domText;
+                    }}
+                }}
+
+                if (candidate && candidate.length > 0) {{
                     currentInterimBuffer = "";
-                    interimText.innerText = "...";
-                    interimLiveTrans.innerText = "🌊 Đang bắt âm câu tiếp theo...";
-                    appendSubtitleCard(textToCommit, sourceLangSelect.value, targetLangSelect.value);
+                    lastUncommittedSpeech = "";
+                    if (manualSentenceInput) manualSentenceInput.value = "";
+                    interimText.innerText = "Đã chốt câu! Đang bắt âm câu tiếp theo...";
+                    interimLiveTrans.innerText = "🌊 Đã chuyển câu xuống khung phụ đề bên dưới!";
+
+                    appendSubtitleCard(candidate, sourceLangSelect.value, targetLangSelect.value);
+
+                    // Làm mới phiên nhận diện để xóa buffer cũ của Web Speech API mà không làm gián đoạn thu âm
                     if (isListening && recognition) {{
+                        isManualFlushRestart = true;
                         try {{ recognition.stop(); }} catch (e) {{}}
                     }}
+                }} else {{
+                    // Thông báo trực quan trên thanh trạng thái khi chưa có từ nào để chốt
+                    const prevStatus = statusText.innerText;
+                    statusText.innerText = "💡 Chưa có câu đang nói dở! Hãy nói vào Mic hoặc gõ câu vào ô bên dưới rồi bấm «➕ Chốt câu».";
+                    if (manualSentenceInput) manualSentenceInput.focus();
+                    setTimeout(() => {{
+                        if (isListening) {{
+                            statusText.innerText = `🟢 Đang nghe độ nhạy cao (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Hãy nói vào Mic...`;
+                        }} else {{
+                            statusText.innerText = prevStatus;
+                        }}
+                    }}, 2800);
                 }}
             }}
 
@@ -2203,7 +2657,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 liveTranslateTimer = setTimeout(() => {{
                     if (!text || text.trim().length < 2) return;
                     translateSentence(text.trim(), sourceLangSelect.value, targetLangSelect.value).then(trans => {{
-                        if (currentInterimBuffer.trim().length > 0) {{
+                        if (currentInterimBuffer.trim().length > 0 || lastUncommittedSpeech.trim().length > 0) {{
                             interimLiveTrans.innerText = "🌊 Dịch trực tiếp: " + trans;
                         }}
                     }});
@@ -2229,7 +2683,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             async function startRecognition() {{
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (!SpeechRecognition) {{
-                    statusText.innerText = "⚠️ Trình duyệt chưa hỗ trợ Web Speech API. Hãy mở bằng Google Chrome hoặc Microsoft Edge (hoặc dùng mục Thu âm bên dưới)!";
+                    statusText.innerText = "⚠️ Trình duyệt chưa hỗ trợ Web Speech API. Hãy mở bằng Google Chrome / Edge hoặc gõ vào ô bên dưới và bấm Chốt câu!";
                     return;
                 }}
 
@@ -2249,7 +2703,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                         statusDot.classList.add("active");
                         statusText.innerText = `🟢 Đang nghe độ nhạy cao (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Hãy nói vào Mic...`;
                         btnStart.disabled = true;
-                        btnFlush.disabled = false;
                         btnPause.disabled = false;
                         startReactiveWave();
                     }};
@@ -2264,6 +2717,8 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                                 const finalSentence = transcript.trim();
                                 if (finalSentence.length > 0) {{
                                     currentInterimBuffer = "";
+                                    lastUncommittedSpeech = "";
+                                    if (manualSentenceInput) manualSentenceInput.value = "";
                                     if (autoCommitTimer) clearTimeout(autoCommitTimer);
                                     appendSubtitleCard(finalSentence, sourceLangSelect.value, targetLangSelect.value);
                                 }}
@@ -2276,7 +2731,11 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
                         if (interimTranscript.trim().length > 0) {{
                             currentInterimBuffer = interimTranscript.trim();
+                            lastUncommittedSpeech = currentInterimBuffer;
                             interimText.innerText = currentInterimBuffer;
+                            if (manualSentenceInput) {{
+                                manualSentenceInput.value = currentInterimBuffer;
+                            }}
                             scheduleLiveInterimTranslation(currentInterimBuffer);
 
                             if (autoCommitTimer) clearTimeout(autoCommitTimer);
@@ -2306,10 +2765,13 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     }};
 
                     recognition.onend = () => {{
-                        if (currentInterimBuffer.trim().length > 0) {{
+                        if (!isManualFlushRestart && currentInterimBuffer.trim().length > 0) {{
                             appendSubtitleCard(currentInterimBuffer.trim(), sourceLangSelect.value, targetLangSelect.value);
                             currentInterimBuffer = "";
+                            lastUncommittedSpeech = "";
+                            if (manualSentenceInput) manualSentenceInput.value = "";
                         }}
+                        isManualFlushRestart = false;
                         if (isListening) {{
                             setTimeout(() => {{
                                 if (isListening && recognition) {{
@@ -2341,6 +2803,8 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 if (currentInterimBuffer.trim().length > 0) {{
                     appendSubtitleCard(currentInterimBuffer.trim(), sourceLangSelect.value, targetLangSelect.value);
                     currentInterimBuffer = "";
+                    lastUncommittedSpeech = "";
+                    if (manualSentenceInput) manualSentenceInput.value = "";
                 }}
                 if (recognition) {{
                     try {{ recognition.stop(); }} catch (e) {{}}
@@ -2348,15 +2812,16 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 stopAudioPreAmp();
                 if (waveAnimId) cancelAnimationFrame(waveAnimId);
                 statusDot.classList.remove("active");
-                statusText.innerText = "⏸️ Đã tạm dừng thu âm. Bạn có thể tiếp tục hoặc tải bài giảng về máy.";
+                statusText.innerText = "⏸️ Đã tạm dừng thu âm. Bạn vẫn có thể bấm «➕ Chốt câu» hoặc tải bài giảng về máy.";
                 btnStart.disabled = false;
-                btnFlush.disabled = true;
                 btnPause.disabled = true;
             }}
 
             function clearTranscript() {{
                 lectureHistory = [];
                 currentInterimBuffer = "";
+                lastUncommittedSpeech = "";
+                if (manualSentenceInput) manualSentenceInput.value = "";
                 subtitleStream.innerHTML = `
                     <div id="emptyHint" class="empty-hint">
                         🚢 Đã xóa màn hình. Nhấn <b>Bắt đầu nghe</b> để ghi nhận bài giảng mới.
@@ -2481,17 +2946,41 @@ def transcribe_and_translate_audio_bytes(
 
 
 # ==============================================================================
-# 8. GIAO DIỆN CHÍNH (SIDEBAR + HEADER TÁC GIẢ CỐ ĐỊNH + 2 TAB CHỨC NĂNG)
+# 8. GIAO DIỆN CHÍNH (SIDEBAR + FORM NGƯỜI DÙNG + LƯU CỐ ĐỊNH KEY + 2 TAB CHỨC NĂNG)
 # ==============================================================================
 def main() -> None:
-    inject_ocean_blue_css()
-
     if "input_text_area" not in st.session_state:
         st.session_state["input_text_area"] = ""
 
+    # Kiểm tra quyền Tác giả (qua URL ?admin=minh1106 hoặc qua hộp mở khóa ở cuối Sidebar)
+    if "is_author_admin" not in st.session_state:
+        st.session_state["is_author_admin"] = False
+    try:
+        if st.query_params.get("admin", "") == DEFAULT_AUTHOR_PASSWORD:
+            st.session_state["is_author_admin"] = True
+    except Exception:
+        pass
+
+    # Nạp Gemini API Key đã lưu cố định (nếu có)
+    persisted_key = load_saved_api_key_from_store()
+    if "saved_gemini_api_key" not in st.session_state:
+        st.session_state["saved_gemini_api_key"] = persisted_key
+    elif persisted_key and not st.session_state["saved_gemini_api_key"]:
+        st.session_state["saved_gemini_api_key"] = persisted_key
+
+    if "declined_keys" not in st.session_state:
+        st.session_state["declined_keys"] = set()
+
+    # Tự động kiểm tra localStorage trên trình duyệt ở lần tải đầu tiên
+    if not st.session_state["saved_gemini_api_key"] and not st.session_state.get("ls_sync_checked"):
+        st.session_state["ls_sync_checked"] = True
+        inject_localstorage_key_sync(action="load")
+
+    inject_ocean_blue_css(is_author_admin=st.session_state["is_author_admin"])
     avatar_uri = get_author_avatar_data_uri()
 
     with st.sidebar:
+        # 1. THẺ GIỚI THIỆU TÁC GIẢ
         render_html(
             f"""
             <div class="author-sidebar-card">
@@ -2509,6 +2998,80 @@ def main() -> None:
             """
         )
 
+        # 2. FORM NHẬP HỌ TÊN NGƯỜI DÙNG (NẰM NGAY DƯỚI PHẦN GIỚI THIỆU TÁC GIẢ)
+        render_html(
+            """
+            <div class="user-checkin-card">
+                <div style="font-size:0.95rem; font-weight:800; color:#7DD3FC; margin-bottom:2px;">
+                    👤 Thông tin Sinh viên sử dụng
+                </div>
+                <div style="font-size:0.76rem; color:#E0F2FE; line-height:1.35;">
+                    Nhập thông tin kết nối cộng đồng sinh viên Việt tại Nga (gửi thông báo tới tác giả Mai Văn Minh):
+                </div>
+            </div>
+            """
+        )
+
+        with st.form("student_user_checkin_form", clear_on_submit=False):
+            user_full_name = st.text_input(
+                "✍️ Họ và tên của bạn:",
+                value=st.session_state.get("confirmed_user_name", ""),
+                placeholder="VD: Nguyễn Văn A",
+            )
+            user_student_year = st.selectbox(
+                "🎓 Sinh viên năm mấy:",
+                options=[
+                    "Dự bị tiếng Nga (Подфак)",
+                    "Sinh viên Năm 1",
+                    "Sinh viên Năm 2",
+                    "Sinh viên Năm 3",
+                    "Sinh viên Năm 4",
+                    "Sinh viên Năm 5 (Специалитет)",
+                    "Cao học / Thạc sĩ (Магистратура)",
+                    "Nghiên cứu sinh (Аспирантура)",
+                    "Khác / Đã tốt nghiệp",
+                ],
+                index=3,
+            )
+            user_university = st.text_input(
+                "🏫 Học ở trường nào:",
+                value=st.session_state.get("confirmed_user_uni", ""),
+                placeholder="VD: СПбГМТУ, ИТМО, СПбГУ, МГТУ...",
+            )
+            confirm_user_btn = st.form_submit_button("✅ Xác nhận thông tin", use_container_width=True, type="primary")
+
+        if confirm_user_btn:
+            if not user_full_name.strip() or not user_university.strip():
+                st.warning("⚠️ Bạn vui lòng nhập đầy đủ **Họ và tên** và **Tên trường đang theo học** nhé!")
+            else:
+                st.session_state["confirmed_user_name"] = user_full_name.strip()
+                st.session_state["confirmed_user_year"] = user_student_year
+                st.session_state["confirmed_user_uni"] = user_university.strip()
+                with st.spinner("📨 Đang xác nhận & gửi thông báo tới email tác giả..."):
+                    sent_ok, relay_name = send_user_notification_email(
+                        full_name=user_full_name.strip(),
+                        student_year=user_student_year,
+                        university=user_university.strip(),
+                    )
+                    trigger_client_side_email_relay(
+                        full_name=user_full_name.strip(),
+                        student_year=user_student_year,
+                        university=user_university.strip(),
+                    )
+                st.success(
+                    f"🎉 Xin chào **{user_full_name.strip()}** ({user_student_year} — {user_university.strip()})! "
+                    f"Đã gửi thông báo về email tác giả (`{AUTHOR_NOTIFICATION_EMAIL}`)."
+                )
+
+        if st.session_state.get("confirmed_user_name") and not confirm_user_btn:
+            st.caption(
+                f"🟢 Đang sử dụng: **{st.session_state['confirmed_user_name']}** "
+                f"({st.session_state.get('confirmed_user_year', '')} — {st.session_state.get('confirmed_user_uni', '')})"
+            )
+
+        st.markdown("---")
+
+        # 3. BUỒNG LÁI HỆ THỐNG & LƯU CỐ ĐỊNH GEMINI API KEY
         render_html(
             f"""
             <div style="display:flex; align-items:center; gap:10px; margin-top:4px; margin-bottom:8px;">
@@ -2518,11 +3081,14 @@ def main() -> None:
             """
         )
 
+        saved_key_val = clean_api_key(st.session_state.get("saved_gemini_api_key", ""))
+
         gemini_api_key = st.text_input(
             "🔑 Gemini API Key (Chấp nhận mọi Key):",
+            value=saved_key_val,
             type="password",
             placeholder="Dán bất kỳ Gemini API Key nào (hoặc để trống)",
-            help="Hỗ trợ mọi loại Gemini API Key (2.5-flash, 2.0-flash, 1.5-flash, 1.5-pro...). Nếu để trống, ứng dụng tự động dùng chế độ Dịch Đa Luồng GTX Siêu Tốc 5 cổng miễn phí!",
+            help="Khi nhập Key lần đầu, bạn có thể chọn Lưu cố định để các lần sau vào web không cần dán lại!",
         )
 
         render_html(
@@ -2534,10 +3100,47 @@ def main() -> None:
         )
 
         clean_key_input = clean_api_key(gemini_api_key)
+
+        # Nếu người dùng vừa nhập một Key mới chưa được lưu cố định -> Hiện thông báo hỏi có muốn lưu cố định không
+        if (
+            clean_key_input
+            and clean_key_input != saved_key_val
+            and clean_key_input not in st.session_state["declined_keys"]
+        ):
+            st.warning(
+                "💾 **Bạn có muốn lưu cố định Gemini API Key này cho các lần sử dụng sau không?**\n\n"
+                "Nếu đồng ý, từ các lần sau bạn mở lại hoặc tải lại trang sẽ chỉ việc dùng luôn mà không cần sao chép dán lại."
+            )
+            save_col1, save_col2 = st.columns(2)
+            with save_col1:
+                if st.button("✅ Đồng ý lưu", key="btn_agree_save_key", type="primary", use_container_width=True):
+                    st.session_state["saved_gemini_api_key"] = clean_key_input
+                    save_api_key_permanently(clean_key_input)
+                    inject_localstorage_key_sync(action="save", key_to_save=clean_key_input)
+                    st.toast("✅ Đã lưu cố định Gemini API Key cho các lần truy cập sau!")
+                    st.rerun()
+            with save_col2:
+                if st.button("❌ Chỉ dùng lần này", key="btn_decline_save_key", use_container_width=True):
+                    st.session_state["declined_keys"].add(clean_key_input)
+                    st.info("👍 Key sẽ chỉ dùng trong phiên hiện tại.")
+                    st.rerun()
+
+        # Nếu Key đang dùng đã được lưu cố định -> Báo đã lưu cố định và có nút gỡ nếu muốn đổi Key
         if clean_key_input:
             avail_models = discover_available_gemini_models(clean_key_input)
             top_model = avail_models[0] if avail_models else "gemini-flash"
-            st.success(f"✨ Đã nhận Gemini API Key! (Model ưu tiên: `{top_model}` + Tự động dự phòng GTX)")
+            if clean_key_input == saved_key_val:
+                st.success(
+                    f"📌 **Đã lưu cố định Gemini API Key!** (Model ưu tiên: `{top_model}`)\n\n"
+                    "Các lần sau vào web bạn chỉ việc sử dụng ngay."
+                )
+                if st.button("🗑️ Xóa / Đổi Key cố định đã lưu", key="btn_delete_saved_key", use_container_width=True):
+                    st.session_state["saved_gemini_api_key"] = ""
+                    delete_saved_api_key()
+                    inject_localstorage_key_sync(action="delete")
+                    st.rerun()
+            else:
+                st.success(f"✨ Đã nhận Gemini API Key! (Model ưu tiên: `{top_model}` + Tự động dự phòng GTX)")
         else:
             st.info("⚡ Chế độ hiện tại: **Dịch Đa Luồng GTX Siêu Tốc (5 Cổng POST)** — Không cần Key!")
 
@@ -2601,7 +3204,7 @@ def main() -> None:
             or slang_search.lower() in item["full"].lower()
         ]
 
-        with st.container(height=280):
+        with st.container(height=260):
             for item in filtered_slang:
                 with st.expander(f"⚓ {item['accent']} — {item['vi']}"):
                     st.markdown(
@@ -2614,11 +3217,47 @@ def main() -> None:
                         st.rerun()
 
         st.markdown("---")
+        # 4. CHẾ ĐỘ TÁC GIẢ (MỞ KHÓA SỬA APP, ĐƯỜNG DẪN GITHUB & XEM DANH SÁCH NGƯỜI DÙNG)
+        with st.expander("🔐 Chế độ Tác giả (Mai Văn Minh)"):
+            if not st.session_state["is_author_admin"]:
+                admin_pwd = st.text_input(
+                    "Nhập mật khẩu tác giả để hiện nút Sửa App & GitHub:",
+                    type="password",
+                    key="author_pwd_input",
+                )
+                if st.button("🔓 Mở khóa quyền Tác giả", use_container_width=True):
+                    if admin_pwd == DEFAULT_AUTHOR_PASSWORD:
+                        st.session_state["is_author_admin"] = True
+                        st.success("✅ Đã mở khóa giao diện Tác giả! Các nút Sửa App & GitHub đã hiển thị trở lại.")
+                        st.rerun()
+                    else:
+                        st.error("❌ Mật khẩu không đúng!")
+            else:
+                st.success("👑 Đang ở Chế độ Tác giả (Đã hiện thanh công cụ Sửa App & GitHub)")
+                if USER_LOGS_FILE.exists():
+                    try:
+                        logs_data = json.loads(USER_LOGS_FILE.read_text(encoding="utf-8"))
+                        st.markdown(f"**📋 Danh sách sinh viên đã xác nhận ({len(logs_data)}):**")
+                        for entry in logs_data[:15]:
+                            st.caption(
+                                f"• **{entry.get('full_name')}** — {entry.get('student_year')} ({entry.get('university')}) lúc `{entry.get('time')}`"
+                            )
+                    except Exception:
+                        pass
+                if st.button("🔒 Khóa lại (Ẩn Sửa App & GitHub)", use_container_width=True):
+                    st.session_state["is_author_admin"] = False
+                    try:
+                        if "admin" in st.query_params:
+                            del st.query_params["admin"]
+                    except Exception:
+                        pass
+                    st.rerun()
+
         render_html(
             f"""
-            <div style="text-align:center; font-size:0.82rem; padding: 8px; background: rgba(255,255,255,0.08); border-radius: 12px;">
+            <div style="text-align:center; font-size:0.82rem; padding: 8px; margin-top:6px; background: rgba(255,255,255,0.08); border-radius: 12px;">
                 {STICKER_SAILBOAT_MINI}<br/>
-                <b>Anh Minh Translate v5.2 (5-Port GTX & All-Gemini)</b><br/>
+                <b>Anh Minh Translate v5.5 (5-Port GTX & All-Gemini)</b><br/>
                 Tác giả: <b>Mai Văn Minh</b><br/>
                 <i>Đóng tàu — СПбГМТУ (Xanh-Petecbua)</i>
             </div>
@@ -2690,7 +3329,6 @@ def main() -> None:
                 result_data: Optional[Dict] = None
                 used_ai = False
 
-                # Nếu có bất kỳ Gemini API Key nào được nhập, thử gọi Gemini trước
                 if clean_key_input:
                     with st.spinner("🧠 Đang phân tích bằng Gemini AI..."):
                         result_data, gemini_err = call_gemini_smart_translate(
@@ -2704,7 +3342,6 @@ def main() -> None:
                         elif gemini_err and "không chính xác" in gemini_err.lower():
                             st.warning(f"⚠️ {gemini_err} Hệ thống đã tự động chuyển sang Chế độ Dịch Đa Luồng GTX Siêu Tốc!")
 
-                # Nếu không có Key hoặc Key tạm hết hạn mức -> Tự động dùng Dịch Đa Luồng GTX 5 cổng
                 if not result_data:
                     with st.spinner("⚡ Đang dịch đa luồng siêu tốc (GTX 5-Port)..."):
                         result_data = fallback_smart_translate(
@@ -2909,11 +3546,11 @@ def main() -> None:
             f"""
             <div class="ocean-card" style="padding: 18px 24px; margin-bottom: 14px;">
                 <div class="ocean-card-header" style="margin-bottom: 8px; padding-bottom: 8px;">
-                    <div class="ocean-card-title">{STICKER_COMPASS_3D} Trợ lý Nghe Giảng Trực Tiếp (Đã nâng cấp Mic Siêu Nhạy & Khuếch đại Âm)</div>
+                    <div class="ocean-card-title">{STICKER_COMPASS_3D} Trợ lý Nghe Giảng Trực Tiếp (Đã sửa nút Chốt Câu & Khuếch đại Âm)</div>
                     <span class="ocean-pill">🔥 Bắt âm giảng đường rộng • Hỗ trợ Mobile</span>
                 </div>
                 <div style="font-size:0.94rem; color:#1E293B; line-height:1.6;">
-                    💡 <b>Tính năng mới:</b> Tích hợp bộ lọc dải tần giọng nói và chế độ <b>«🔥 Cực nhạy — Giảng đường rộng»</b> cùng tính năng <b>Khuếch đại giọng nói nhỏ (Gain Boost x3.0)</b> giúp bắt rõ lời giảng viên ngay cả khi ngồi bàn xa.
+                    💡 <b>Tính năng mới:</b> Nút <b>«➕ Chốt câu»</b> luôn hoạt động ngay cả khi đang nói dở hoặc khi bạn gõ/sửa câu trực tiếp vào thanh bắt âm (có thể bấm phím <b>Enter</b> để chốt câu tức thì).
                 </div>
             </div>
             """
@@ -2923,7 +3560,7 @@ def main() -> None:
             gemini_api_key=clean_key_input,
             selected_domain=selected_domain,
         )
-        components.html(realtime_html, height=680, scrolling=False)
+        components.html(realtime_html, height=710, scrolling=False)
 
         render_html(
             f'<div class="nautical-divider">{STICKER_ANCHOR_3D} THU ÂM ĐỘ NHẠY CAO CHO ĐIỆN THOẠI & MỌI TRÌNH DUYỆT {STICKER_ANCHOR_3D}</div>'
