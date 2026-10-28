@@ -34,7 +34,7 @@ except Exception:
 
 
 # ==============================================================================
-# 1. CẤU HÌNH TRANG, BẢO MẬT TÁC GIẢ & EMAIL THÔNG BÁO
+# 1. CẤU HÌNH TRANG, BẢO MẬT TÁC GIẢ & EMAIL THÔNG BỌ
 # ==============================================================================
 st.set_page_config(
     page_title="Anh Minh Translate | Mai Văn Minh - СПбГМТУ",
@@ -433,114 +433,27 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
     }
 
     # 2. Kênh Formspree (nếu có FORMSPREE_ENDPOINT)
-    has_confirmed_profile = bool(
-            st.session_state.get("confirmed_user_name") and st.session_state.get("confirmed_user_uni")
-        )
-
-        # Thực thi gửi Email từ trình duyệt SAU KHI trang đã rerun ổn định (không bị st.rerun() cắt ngang!)
-        if st.session_state.get("pending_email_relay"):
-            relay_info = st.session_state.pop("pending_email_relay")
-            inject_localstorage_sync(
-                action="save_profile",
-                student_profile=relay_info,
+    formspree_url = FORMSPREE_ENDPOINT.strip()
+    if formspree_url:
+        try:
+            fs_data = {
+                "email": AUTHOR_NOTIFICATION_EMAIL,
+                "Họ và tên": full_name,
+                "Sinh viên năm": student_year,
+                "Trường đại học": university,
+                "Thời gian": now_str,
+            }
+            req_fsp = urllib.request.Request(
+                formspree_url,
+                data=json.dumps(fs_data).encode("utf-8"),
+                headers=headers_json,
+                method="POST",
             )
-            trigger_client_side_email_relay(
-                full_name=relay_info["full_name"],
-                student_year=relay_info["student_year"],
-                university=relay_info["university"],
-            )
-
-        if has_confirmed_profile and not st.session_state["editing_student_profile"]:
-            sv_name = st.session_state["confirmed_user_name"]
-            sv_year = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
-            sv_uni = st.session_state["confirmed_user_uni"]
-
-            render_html(
-                f"""
-                <div class="saved-student-badge-box">
-                    <div style="font-size:0.76rem; color:#A7F3D0; font-weight:700; margin-bottom:3px;">
-                        ✅ ĐÃ LƯU THÔNG TIN CỐ ĐỊNH
-                    </div>
-                    <div style="font-size:0.98rem; font-weight:800; color:#FFFFFF;">
-                        🎓 {sv_name}
-                    </div>
-                    <div style="font-size:0.82rem; color:#E0F2FE; margin-top:2px;">
-                        • {sv_year}<br/>
-                        • Trường: <b>{sv_uni}</b>
-                    </div>
-                </div>
-                """
-            )
-            col_prof1, col_prof2 = st.columns(2)
-            with col_prof1:
-                if st.button("✏️ Đổi thông tin", key="btn_edit_student_info", use_container_width=True):
-                    st.session_state["editing_student_profile"] = True
-                    st.rerun()
-            with col_prof2:
-                if st.button("📨 Gửi lại Email", key="btn_resend_email_notify", use_container_width=True):
-                    ok_mail, channel_mail = send_user_notification_email(sv_name, sv_year, sv_uni)
-                    trigger_client_side_email_relay(sv_name, sv_year, sv_uni)
-                    st.toast(f"📨 Đã gửi thông báo về {AUTHOR_NOTIFICATION_EMAIL} ({channel_mail})!")
-        else:
-            default_year_idx = 3
-            cur_year = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
-            if cur_year in STUDENT_YEAR_OPTIONS:
-                default_year_idx = STUDENT_YEAR_OPTIONS.index(cur_year)
-
-            with st.form("student_user_checkin_form", clear_on_submit=False):
-                user_full_name = st.text_input(
-                    "✍️ Họ và tên của bạn:",
-                    value=st.session_state.get("confirmed_user_name", ""),
-                    placeholder="VD: Nguyễn Văn A",
-                )
-                user_student_year = st.selectbox(
-                    "🎓 Sinh viên năm mấy:",
-                    options=STUDENT_YEAR_OPTIONS,
-                    index=default_year_idx,
-                )
-                user_university = st.text_input(
-                    "🏫 Học ở trường nào:",
-                    value=st.session_state.get("confirmed_user_uni", ""),
-                    placeholder="VD: СПбГМТУ, ИТМО, СПбГУ, МГТУ...",
-                )
-                confirm_user_btn = st.form_submit_button(
-                    "✅ Xác nhận & Lưu cho các lần sau",
-                    use_container_width=True,
-                    type="primary",
-                )
-
-            if confirm_user_btn:
-                if not user_full_name.strip() or not user_university.strip():
-                    st.warning("⚠️ Bạn vui lòng nhập đầy đủ **Họ và tên** và **Tên trường đang theo học** nhé!")
-                else:
-                    clean_name = user_full_name.strip()
-                    clean_uni = user_university.strip()
-                    st.session_state["confirmed_user_name"] = clean_name
-                    st.session_state["confirmed_user_year"] = user_student_year
-                    st.session_state["confirmed_user_uni"] = clean_uni
-                    st.session_state["editing_student_profile"] = False
-
-                    save_student_profile_permanently(clean_name, user_student_year, clean_uni)
-
-                    with st.spinner("📨 Đang lưu thông tin cố định & gửi thông báo tới tác giả..."):
-                        send_user_notification_email(
-                            full_name=clean_name,
-                            student_year=user_student_year,
-                            university=clean_uni,
-                        )
-                        # Lưu cờ để gửi tiếp từ trình duyệt ngay sau khi st.rerun() hoàn tất
-                        st.session_state["pending_email_relay"] = {
-                            "full_name": clean_name,
-                            "student_year": user_student_year,
-                            "university": clean_uni,
-                        }
-                    st.toast(f"✅ Đã lưu thông tin của {clean_name} và gửi thông báo tới tác giả!")
-                    st.rerun()
-
-            if has_confirmed_profile and st.session_state["editing_student_profile"]:
-                if st.button("↩️ Hủy chỉnh sửa", key="btn_cancel_edit_student", use_container_width=True):
-                    st.session_state["editing_student_profile"] = False
-                    st.rerun()
+            with urllib.request.urlopen(req_fsp, timeout=8) as resp:
+                if resp.status in (200, 201):
+                    return True, "Formspree"
+        except Exception:
+            pass
 
     # 3. Kênh EmailJS (nếu có cấu hình)
     ejs_service = EMAILJS_SERVICE_ID.strip()
@@ -691,6 +604,7 @@ def trigger_client_side_email_relay(full_name: str, student_year: str, universit
         """,
         height=0,
     )
+
 
 def get_fixed_author_portrait_svg_uri() -> str:
     svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
@@ -2245,17 +2159,6 @@ def fallback_smart_translate(
 
 # ==============================================================================
 # 6. CÔNG NGHỆ THU ÂM GIẢNG ĐƯỜNG HYBRID VOICE AI (MÔ HÌNH CLAUDE & CHATGPT WHISPER)
-#    KHẮC PHỤC TRIỆT ĐỂ:
-#    1. KHÔNG XUNG ĐỘT MIC (Gọi SpeechRecognition đồng bộ ngay khi bấm nút, không bị
-#       await getUserMedia() làm mất quyền hoặc khóa độc quyền thiết bị thu âm).
-#    2. MÔ HÌNH HYBRID 2 LÕI NHƯ CHATGPT VOICE & CLAUDE:
-#       - Lõi 1: Web Speech Live Streaming (hiển thị từng chữ tức thì trong "CÂU ĐANG THU").
-#       - Lõi 2: Smart VAD + PCM 16kHz Auto-Gain Recorder (Khuếch đại thực sự tín hiệu âm thanh
-#         lên tới x12.0 + Chuẩn hóa RMS như Whisper). Khi nói nhỏ/xa hoặc khi Web Speech bị
-#         nghẽn/không hiện chữ, bộ thu PCM VAD sẽ tự động hiển thị trạng thái thu âm trực tiếp
-#         trong "CÂU ĐANG THU" và nhận diện bằng AI Multimodal Audio / Cloud ASR!
-#    3. THANH ĐIỀU CHỈNH ĐỘ NHẠY MIC (1x -> 12x) + ĐỒNG HỒ ĐO ĐỘ NHẠY dB/RMS THỜI GIAN THỰC
-#       + TẮT NOISE SUPPRESSION CƯỚP TIẾNG KHI THU KHOẢNG CÁCH XA TRONG GIẢNG ĐƯỜNG.
 # ==============================================================================
 def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: str = "") -> str:
     safe_domain = json.dumps(selected_domain)
@@ -3449,7 +3352,7 @@ ${{cleanCurrent}}`;
                 }} catch (err2) {{}}
 
                 try {{
-                    const mmUrl = `https://api.mymemory.translated.net/get?q=${{encodeURIComponent(cleanCurrent.slice(0, 450))&langpair=${{srcShort}}|${{tgtLang}}`;
+                    const mmUrl = `https://api.mymemory.translated.net/get?q=${{encodeURIComponent(cleanCurrent.slice(0, 450))}}&langpair=${{srcShort}}|${{tgtLang}}`;
                     const res3 = await fetch(mmUrl);
                     const data3 = await res3.json();
                     if (data3 && data3.responseData && data3.responseData.translatedText) {{
@@ -3865,12 +3768,9 @@ ${{cleanCurrent}}`;
     </html>
     """
 
+
 # ==============================================================================
 # 7. XỬ LÝ THU ÂM BẰNG PYTHON THUẦN (CHUẨN HÓA RMS + PRE-EMPHASIS NHƯ WHISPER X12.0)
-#    - Khắc phục lỗi tiếng "click" lúc bấm nút làm max_amp bị đẩy lên 32767 khiến
-#      câu nói thật bị nhỏ không được khuếch đại.
-#    - Loại bỏ adjust_for_ambient_noise trên file đã thu sẵn (tránh cắt mất chữ đầu).
-#    - Tích hợp nhận diện đa tầng: Gemini Multimodal Audio (như ChatGPT/Claude) + Google Speech.
 # ==============================================================================
 def boost_wav_audio_bytes(audio_bytes: bytes, max_gain_factor: float = 12.0) -> bytes:
     """
@@ -3921,7 +3821,6 @@ def boost_wav_audio_bytes(audio_bytes: bytes, max_gain_factor: float = 12.0) -> 
                 prev_sample = cur
 
                 boosted = emphasized * auto_gain
-                # Soft limiter ở ngưỡng +-29000 để không bị rè tiếng
                 if boosted > 29000.0:
                     boosted = 29000.0 + 3767.0 * math.tanh((boosted - 29000.0) / 8000.0)
                 elif boosted < -29000.0:
@@ -4041,7 +3940,7 @@ def transcribe_and_translate_audio_bytes(
                 ai_translated = fast_free_translate(ai_transcript, src_short, target_lang_trans)
             return ai_transcript, ai_translated, None
 
-    # Bước 3: Sử dụng Google SpeechRecognition trên bản âm thanh đã kích RMS (KHÔNG gọi adjust_for_ambient_noise để tránh mất chữ đầu)
+    # Bước 3: Sử dụng Google SpeechRecognition trên bản âm thanh đã kích RMS
     if sr is None:
         return None, None, "Thư viện SpeechRecognition chưa được cài đặt trong requirements.txt."
 
@@ -4050,7 +3949,6 @@ def transcribe_and_translate_audio_bytes(
     recognizer.dynamic_energy_threshold = False
 
     last_err = None
-    # Thử lần lượt trên bản đã khuếch đại RMS và bản gốc
     for candidate_wav in (boosted_bytes, audio_bytes):
         try:
             with sr.AudioFile(io.BytesIO(candidate_wav)) as source:
@@ -4153,6 +4051,19 @@ def main() -> None:
             st.session_state.get("confirmed_user_name") and st.session_state.get("confirmed_user_uni")
         )
 
+        # Thực thi gửi Email từ trình duyệt SAU KHI trang đã rerun ổn định (không bị st.rerun() cắt ngang!)
+        if st.session_state.get("pending_email_relay"):
+            relay_info = st.session_state.pop("pending_email_relay")
+            inject_localstorage_sync(
+                action="save_profile",
+                student_profile=relay_info,
+            )
+            trigger_client_side_email_relay(
+                full_name=relay_info["full_name"],
+                student_year=relay_info["student_year"],
+                university=relay_info["university"],
+            )
+
         if has_confirmed_profile and not st.session_state["editing_student_profile"]:
             sv_name = st.session_state["confirmed_user_name"]
             sv_year = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
@@ -4174,9 +4085,16 @@ def main() -> None:
                 </div>
                 """
             )
-            if st.button("✏️ Đổi / Cập nhật thông tin sinh viên", key="btn_edit_student_info", use_container_width=True):
-                st.session_state["editing_student_profile"] = True
-                st.rerun()
+            col_prof1, col_prof2 = st.columns(2)
+            with col_prof1:
+                if st.button("✏️ Đổi thông tin", key="btn_edit_student_info", use_container_width=True):
+                    st.session_state["editing_student_profile"] = True
+                    st.rerun()
+            with col_prof2:
+                if st.button("📨 Gửi lại Email", key="btn_resend_email_notify", use_container_width=True):
+                    ok_mail, channel_mail = send_user_notification_email(sv_name, sv_year, sv_uni)
+                    trigger_client_side_email_relay(sv_name, sv_year, sv_uni)
+                    st.toast(f"📨 Đã gửi thông báo về {AUTHOR_NOTIFICATION_EMAIL} ({channel_mail})!")
         else:
             default_year_idx = 3
             cur_year = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
@@ -4217,14 +4135,6 @@ def main() -> None:
                     st.session_state["editing_student_profile"] = False
 
                     save_student_profile_permanently(clean_name, user_student_year, clean_uni)
-                    inject_localstorage_sync(
-                        action="save_profile",
-                        student_profile={
-                            "full_name": clean_name,
-                            "student_year": user_student_year,
-                            "university": clean_uni,
-                        },
-                    )
 
                     with st.spinner("📨 Đang lưu thông tin cố định & gửi thông báo tới tác giả..."):
                         send_user_notification_email(
@@ -4232,12 +4142,13 @@ def main() -> None:
                             student_year=user_student_year,
                             university=clean_uni,
                         )
-                        trigger_client_side_email_relay(
-                            full_name=clean_name,
-                            student_year=user_student_year,
-                            university=clean_uni,
-                        )
-                    st.toast(f"✅ Đã lưu thông tin của {clean_name} cho các lần truy cập sau!")
+                        # Lưu cờ để gửi tiếp từ trình duyệt ngay sau khi st.rerun() hoàn tất
+                        st.session_state["pending_email_relay"] = {
+                            "full_name": clean_name,
+                            "student_year": user_student_year,
+                            "university": clean_uni,
+                        }
+                    st.toast(f"✅ Đã lưu thông tin của {clean_name} và gửi thông báo tới tác giả!")
                     st.rerun()
 
             if has_confirmed_profile and st.session_state["editing_student_profile"]:
