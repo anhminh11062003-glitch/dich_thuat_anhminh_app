@@ -49,22 +49,32 @@ GEMINI_API_KEY_URL = "https://aistudio.google.com/app/apikey"
 AUTHOR_NOTIFICATION_EMAIL = "anhminh11062003@gmail.com"
 
 # Mật khẩu mở khóa giao diện Tác giả (sửa app / xem Github / xem danh sách người dùng)
-# Có thể ghi đè trong Streamlit Secrets bằng khóa AUTHOR_ADMIN_PASSWORD
 DEFAULT_AUTHOR_PASSWORD = os.environ.get("AUTHOR_ADMIN_PASSWORD", "minh1106")
 
-# Tùy chọn cấu hình thêm Formspree Endpoint hoặc EmailJS (nếu để trống sẽ tự động dùng cổng trung gian FormSubmit gửi thẳng tới anhminh11062003@gmail.com)
-FORMSPREE_ENDPOINT = os.environ.get("FORMSPREE_ENDPOINT", "")  # VD: "https://formspree.io/f/xxxxxxx"
+# Tùy chọn cấu hình thêm Formspree Endpoint hoặc EmailJS
+FORMSPREE_ENDPOINT = os.environ.get("FORMSPREE_ENDPOINT", "")
 EMAILJS_SERVICE_ID = os.environ.get("EMAILJS_SERVICE_ID", "")
 EMAILJS_TEMPLATE_ID = os.environ.get("EMAILJS_TEMPLATE_ID", "")
 EMAILJS_PUBLIC_KEY = os.environ.get("EMAILJS_PUBLIC_KEY", "")
 
-# File lưu cố định API Key và lịch sử người dùng trên ổ đĩa
+# File lưu cố định API Key, Hồ sơ Sinh viên và Lịch sử người dùng trên ổ đĩa
 SAVED_KEYS_FILE = Path(".saved_gemini_keys.json")
+SAVED_PROFILES_FILE = Path(".saved_student_profiles.json")
 USER_LOGS_FILE = Path(".user_access_logs.json")
 
-# Nếu bạn có link ảnh trực tiếp (URL hoặc chuỗi data:image/jpeg;base64,...),
-# có thể dán vào biến dưới đây.
 FIXED_AUTHOR_AVATAR_BASE64_OR_URL = ""
+
+STUDENT_YEAR_OPTIONS = [
+    "Dự bị tiếng Nga (Подфак)",
+    "Sinh viên Năm 1",
+    "Sinh viên Năm 2",
+    "Sinh viên Năm 3",
+    "Sinh viên Năm 4",
+    "Sinh viên Năm 5 (Специалитет)",
+    "Cao học / Thạc sĩ (Магистратура)",
+    "Nghiên cứu sinh (Аспирантура)",
+    "Khác / Đã tốt nghiệp",
+]
 
 
 def render_html(html_str: str) -> None:
@@ -80,10 +90,10 @@ def clean_api_key(raw_key: str) -> str:
 
 
 # ==============================================================================
-# 1B. QUẢN LÝ LƯU CỐ ĐỊNH GEMINI API KEY & GỬI EMAIL THÔNG BÁO NGƯỜI DÙNG
+# 1B. QUẢN LÝ LƯU CỐ ĐỊNH GEMINI API KEY, THÔNG TIN SINH VIÊN & GỬI EMAIL
 # ==============================================================================
 def get_client_fingerprint() -> str:
-    """Tạo mã định danh trình duyệt/phiên kết nối để lưu Key cố định cho từng thiết bị."""
+    """Tạo mã định danh trình duyệt/phiên kết nối để lưu Key & Thông tin sinh viên cố định."""
     try:
         headers = st.context.headers if hasattr(st, "context") and hasattr(st.context, "headers") else {}
         ua = headers.get("User-Agent", "default_ua")
@@ -96,7 +106,6 @@ def get_client_fingerprint() -> str:
 
 def load_saved_api_key_from_store() -> str:
     """Đọc API Key đã được người dùng đồng ý lưu cố định trước đó."""
-    # 1. Kiểm tra trên query params (khi JS localStorage tự động đồng bộ lên)
     try:
         qp_key = st.query_params.get("saved_gkey", "")
         if qp_key:
@@ -104,7 +113,6 @@ def load_saved_api_key_from_store() -> str:
     except Exception:
         pass
 
-    # 2. Kiểm tra trong file lưu cố định theo thiết bị
     fp = get_client_fingerprint()
     if SAVED_KEYS_FILE.exists():
         try:
@@ -117,7 +125,7 @@ def load_saved_api_key_from_store() -> str:
 
 
 def save_api_key_permanently(api_key: str) -> None:
-    """Lưu cố định API Key vào ổ đĩa và đồng bộ với localStorage của trình duyệt."""
+    """Lưu cố định API Key vào ổ đĩa."""
     clean_k = clean_api_key(api_key)
     fp = get_client_fingerprint()
     data = {}
@@ -155,13 +163,100 @@ def delete_saved_api_key() -> None:
         pass
 
 
-def inject_localstorage_key_sync(action: str = "load", key_to_save: str = "") -> None:
+def load_saved_student_profile() -> Dict[str, str]:
+    """Đọc thông tin sinh viên đã lưu cố định từ query params (localStorage đồng bộ) hoặc file ổ đĩa."""
+    try:
+        qp_name = st.query_params.get("sv_name", "").strip()
+        qp_year = st.query_params.get("sv_year", "").strip()
+        qp_uni = st.query_params.get("sv_uni", "").strip()
+        if qp_name and qp_uni:
+            profile = {
+                "full_name": qp_name,
+                "student_year": qp_year if qp_year in STUDENT_YEAR_OPTIONS else "Sinh viên Năm 4",
+                "university": qp_uni,
+            }
+            save_student_profile_permanently(
+                profile["full_name"], profile["student_year"], profile["university"]
+            )
+            return profile
+    except Exception:
+        pass
+
+    fp = get_client_fingerprint()
+    if SAVED_PROFILES_FILE.exists():
+        try:
+            data = json.loads(SAVED_PROFILES_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                prof = data.get(fp) or data.get("default")
+                if isinstance(prof, dict) and prof.get("full_name") and prof.get("university"):
+                    return {
+                        "full_name": str(prof["full_name"]).strip(),
+                        "student_year": str(prof.get("student_year", "Sinh viên Năm 4")).strip(),
+                        "university": str(prof["university"]).strip(),
+                    }
+        except Exception:
+            pass
+    return {}
+
+
+def save_student_profile_permanently(full_name: str, student_year: str, university: str) -> None:
+    """Lưu cố định thông tin sinh viên vào ổ đĩa để các lần truy cập sau không cần nhập lại."""
+    fp = get_client_fingerprint()
+    data = {}
+    if SAVED_PROFILES_FILE.exists():
+        try:
+            data = json.loads(SAVED_PROFILES_FILE.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = {}
+    profile_obj = {
+        "full_name": full_name.strip(),
+        "student_year": student_year.strip(),
+        "university": university.strip(),
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    data[fp] = profile_obj
+    data["default"] = profile_obj
+    try:
+        SAVED_PROFILES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def delete_saved_student_profile() -> None:
+    """Xóa thông tin sinh viên đã lưu khi người dùng muốn chỉnh sửa/đổi thông tin."""
+    fp = get_client_fingerprint()
+    if SAVED_PROFILES_FILE.exists():
+        try:
+            data = json.loads(SAVED_PROFILES_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.pop(fp, None)
+                data.pop("default", None)
+                SAVED_PROFILES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+    try:
+        for k in ("sv_name", "sv_year", "sv_uni"):
+            if k in st.query_params:
+                del st.query_params[k]
+    except Exception:
+        pass
+
+
+def inject_localstorage_sync(
+    action: str = "load_all",
+    key_to_save: str = "",
+    student_profile: Optional[Dict[str, str]] = None,
+) -> None:
     """
-    Đồng bộ Gemini API Key với localStorage trên trình duyệt của người dùng
-    để kể cả khi server Streamlit khởi động lại thì trình duyệt vẫn tự nạp lại Key.
+    Đồng bộ cả Gemini API Key và Thông tin Sinh viên với localStorage trên trình duyệt
+    để tự động nạp lại cho mọi lần mở web sau.
     """
     safe_key = json.dumps(clean_api_key(key_to_save))
-    if action == "save":
+    safe_profile = json.dumps(student_profile or {}, ensure_ascii=False)
+
+    if action == "save_key":
         components.html(
             f"""
             <script>
@@ -173,7 +268,7 @@ def inject_localstorage_key_sync(action: str = "load", key_to_save: str = "") ->
             """,
             height=0,
         )
-    elif action == "delete":
+    elif action == "delete_key":
         components.html(
             """
             <script>
@@ -190,18 +285,68 @@ def inject_localstorage_key_sync(action: str = "load", key_to_save: str = "") ->
             """,
             height=0,
         )
+    elif action == "save_profile":
+        components.html(
+            f"""
+            <script>
+            try {{
+                const prof = {safe_profile};
+                localStorage.setItem("anhminh_saved_student_profile", JSON.stringify(prof));
+                const url = new URL(window.parent.location.href);
+                if (prof.full_name) url.searchParams.set("sv_name", prof.full_name);
+                if (prof.student_year) url.searchParams.set("sv_year", prof.student_year);
+                if (prof.university) url.searchParams.set("sv_uni", prof.university);
+                window.parent.history.replaceState({{}}, "", url.toString());
+            }} catch (e) {{}}
+            </script>
+            """,
+            height=0,
+        )
+    elif action == "delete_profile":
+        components.html(
+            """
+            <script>
+            try {
+                localStorage.removeItem("anhminh_saved_student_profile");
+                const url = new URL(window.parent.location.href);
+                ["sv_name", "sv_year", "sv_uni"].forEach(k => url.searchParams.delete(k));
+                window.parent.history.replaceState({}, "", url.toString());
+            } catch (e) {}
+            </script>
+            """,
+            height=0,
+        )
     else:
         components.html(
             """
             <script>
             try {
+                const url = new URL(window.parent.location.href);
+                let changed = false;
+
                 const savedKey = localStorage.getItem("anhminh_saved_gemini_key");
                 if (savedKey && savedKey.trim().length > 10) {
-                    const url = new URL(window.parent.location.href);
                     if (url.searchParams.get("saved_gkey") !== savedKey.trim()) {
                         url.searchParams.set("saved_gkey", savedKey.trim());
-                        window.parent.location.replace(url.toString());
+                        changed = true;
                     }
+                }
+
+                const rawProf = localStorage.getItem("anhminh_saved_student_profile");
+                if (rawProf) {
+                    const prof = JSON.parse(rawProf);
+                    if (prof && prof.full_name && prof.university) {
+                        if (url.searchParams.get("sv_name") !== prof.full_name) {
+                            url.searchParams.set("sv_name", prof.full_name);
+                            url.searchParams.set("sv_year", prof.student_year || "Sinh viên Năm 4");
+                            url.searchParams.set("sv_uni", prof.university);
+                            changed = true;
+                        }
+                    }
+                }
+
+                if (changed) {
+                    window.parent.location.replace(url.toString());
                 }
             } catch (e) {}
             </script>
@@ -237,8 +382,7 @@ def log_user_locally(full_name: str, student_year: str, university: str) -> None
 
 def send_user_notification_email(full_name: str, student_year: str, university: str) -> Tuple[bool, str]:
     """
-    Gửi thông báo người dùng mới về email tác giả (anhminh11062003@gmail.com)
-    thông qua dịch vụ trung gian (Formspree / EmailJS / FormSubmit Ajax).
+    Gửi thông báo người dùng mới về email tác giả (anhminh11062003@gmail.com).
     """
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     log_user_locally(full_name, student_year, university)
@@ -249,7 +393,6 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     }
 
-    # Cách 1: Nếu có cấu hình Formspree Endpoint
     formspree_url = FORMSPREE_ENDPOINT.strip()
     try:
         if not formspree_url and "FORMSPREE_ENDPOINT" in st.secrets:
@@ -279,7 +422,6 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
         except Exception:
             pass
 
-    # Cách 2: Nếu có cấu hình EmailJS REST API
     ejs_service = EMAILJS_SERVICE_ID.strip()
     ejs_template = EMAILJS_TEMPLATE_ID.strip()
     ejs_pubkey = EMAILJS_PUBLIC_KEY.strip()
@@ -309,7 +451,6 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
         except Exception:
             pass
 
-    # Cách 3: Dịch vụ trung gian FormSubmit Ajax API (Gửi thẳng tới anhminh11062003@gmail.com không cần cấu hình trước)
     try:
         formsubmit_url = f"https://formsubmit.co/ajax/{AUTHOR_NOTIFICATION_EMAIL}"
         payload_fs = {
@@ -338,10 +479,6 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
 
 
 def trigger_client_side_email_relay(full_name: str, student_year: str, university: str) -> None:
-    """
-    Gửi song song từ trình duyệt của người dùng (Client-side Fetch) qua cổng trung gian
-    để đảm bảo 100% thông báo được chuyển đi ngay cả khi IP Server bị giới hạn.
-    """
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     safe_payload = json.dumps(
         {
@@ -381,10 +518,6 @@ def trigger_client_side_email_relay(full_name: str, student_year: str, universit
 
 
 def get_fixed_author_portrait_svg_uri() -> str:
-    """
-    Ảnh chân dung cố định của tác giả Mai Văn Minh (nam sinh viên tóc đen rẽ ngôi,
-    đeo kính nửa viền thanh lịch, mặc áo thun trắng, nền trắng xám studio đúng theo ảnh gốc).
-    """
     svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
       <defs>
         <linearGradient id="studioBg" x1="0" y1="0" x2="0" y2="1">
@@ -768,12 +901,9 @@ STICKER_ANCHOR_3D = """
 # 4. CUSTOM CSS CHUYÊN NGHIỆP + ẨN NÚT SỬA APP/GITHUB ĐỐI VỚI NGƯỜI DÙNG THƯỜNG
 # ==============================================================================
 def inject_ocean_blue_css(is_author_admin: bool = False) -> None:
-    # Nếu KHÔNG phải tác giả đang mở khóa -> Ẩn toàn bộ nút Fork, Github, Manage App, Deploy, MainMenu
     hide_github_and_edit_css = ""
     if not is_author_admin:
         hide_github_and_edit_css = """
-        /* Ẩn các nút Fork, GitHub, Sửa App, Deploy, Menu 3 chấm đối với người dùng thường */
-        /* Giữ lại nút đóng/mở thanh Sidebar bên trái */
         [data-testid="stToolbarActions"],
         [data-testid="stAppDeployButton"],
         .stAppDeployButton,
@@ -999,7 +1129,6 @@ def inject_ocean_blue_css(is_author_admin: bool = False) -> None:
             margin-bottom: 6px !important;
         }}
 
-        /* NÚT LẤY GEMINI API KEY CHUYỂN TAB MỚI */
         .gemini-key-link-btn {{
             display: flex;
             align-items: center;
@@ -1026,7 +1155,6 @@ def inject_ocean_blue_css(is_author_admin: bool = False) -> None:
             box-shadow: 0 6px 16px rgba(6, 182, 212, 0.45);
         }}
 
-        /* THẺ GIỚI THIỆU TÁC GIẢ CỐ ĐỊNH Ở SIDEBAR */
         .author-sidebar-card {{
             background: linear-gradient(145deg, rgba(255, 255, 255, 0.16) 0%, rgba(14, 116, 144, 0.35) 100%);
             border: 1.5px solid rgba(125, 211, 252, 0.6);
@@ -1074,17 +1202,23 @@ def inject_ocean_blue_css(is_author_admin: bool = False) -> None:
             color: #E0F2FE !important;
         }}
 
-        /* KHUNG THÔNG TIN NGƯỜI DÙNG Ở SIDEBAR (DƯỚI TÁC GIẢ) */
         .user-checkin-card {{
             background: linear-gradient(145deg, rgba(14, 116, 144, 0.4) 0%, rgba(8, 47, 73, 0.65) 100%);
             border: 1.5px solid #38BDF8;
             border-radius: 16px;
             padding: 12px 14px;
-            margin-bottom: 14px;
+            margin-bottom: 12px;
             box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
         }}
 
-        /* THẺ TÁC GIẢ GÓC TRÁI TRÊN CÙNG BANNER CHÍNH */
+        .saved-student-badge-box {{
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(3, 105, 161, 0.45) 100%);
+            border: 1.5px solid #6EE7B7;
+            border-radius: 14px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+        }}
+
         .author-hero-box {{
             display: flex;
             align-items: center;
@@ -1108,7 +1242,6 @@ def inject_ocean_blue_css(is_author_admin: bool = False) -> None:
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }}
 
-        /* HEADER BANNER NGHỆ THUẬT HÀNG HẢI */
         .am-hero-banner {{
             background: linear-gradient(130deg, #082F49 0%, #0369A1 45%, #0284C7 80%, #06B6D4 100%);
             border-radius: 24px;
@@ -1178,7 +1311,6 @@ def inject_ocean_blue_css(is_author_admin: bool = False) -> None:
             flex-shrink: 0;
         }}
 
-        /* THẺ CARD KHOA HỌC */
         .ocean-card {{
             background: rgba(255, 255, 255, 0.96);
             border-radius: 20px;
@@ -1409,7 +1541,6 @@ def inject_ocean_blue_css(is_author_admin: bool = False) -> None:
             background: linear-gradient(90deg, transparent, #7DD3FC, transparent);
         }}
 
-        /* TỐI ƯU RESPONSIVE CHO ĐIỆN THOẠI DI ĐỘNG */
         @media (max-width: 768px) {{
             .main .block-container {{
                 padding-left: 0.8rem !important;
@@ -1475,7 +1606,7 @@ def render_brand_header(avatar_uri: str) -> None:
                         <div class="am-badges">
                             <span class="am-badge">⚓ Kỹ thuật & Đóng tàu</span>
                             <span class="am-badge">💬 Slang Sinh viên Telegram/VK</span>
-                            <span class="am-badge">🎙️ Mic Siêu Nhạy & Hỗ trợ Điện thoại</span>
+                            <span class="am-badge">🎙️ DSP Mic Siêu Nhạy & Dịch Ngữ Cảnh</span>
                         </div>
                     </div>
                 </div>
@@ -1520,17 +1651,13 @@ def generate_tts_audio(text: str, lang_code: str) -> Optional[bytes]:
 
 
 def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[str]:
-    """
-    Hệ thống 5 cổng dịch độc lập (dùng POST để không bị giới hạn độ dài văn bản
-    và chống hoàn toàn lỗi TooManyRequests trên Streamlit Cloud).
-    """
     headers_form = {
         "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     }
     post_body = urllib.parse.urlencode({"sl": src, "tl": tgt, "q": cleaned}).encode("utf-8")
 
-    # Cổng 1: Google Translate GTX qua phương thức POST
+    # Cổng 1: Google Translate GTX POST
     try:
         url1 = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t"
         req1 = urllib.request.Request(url1, data=post_body, headers=headers_form, method="POST")
@@ -1573,7 +1700,7 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
     except Exception:
         pass
 
-    # Cổng 4: Google Translate GET chia theo đoạn nếu văn bản ngắn
+    # Cổng 4: Google Translate GET
     try:
         encoded_q = urllib.parse.quote(cleaned)
         url4 = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={src}&tl={tgt}&dt=t&q={encoded_q}"
@@ -1942,10 +2069,14 @@ def fallback_smart_translate(
 
 
 # ==============================================================================
-# 6. CUSTOM HTML/JS COMPONENT CHO REAL-TIME VOICE TRANSLATION (SỬA TRIỆT ĐỂ NÚT CHỐT CÂU)
+# 6. CÔNG NGHỆ THU ÂM GIẢNG ĐƯỜNG CAO CẤP NHẤT:
+#    - KHUẾCH ĐẠI DSP PRE-AMP X4.8 TỰ ĐỘNG (NÓI NHỎ VẪN THU RÕ)
+#    - NGẮT CÂU KHI HẾT CÂU HOÀN CHỈNH & DỊCH THEO NGỮ CẢNH CÁC CÂU TRƯỚC
+#    - KHÓA CUỘN THÔNG MINH (LƯỚT LÊN ĐỌC LỊCH SỬ KHÔNG BỊ NHẢY XUỐNG)
 # ==============================================================================
 def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: str = "") -> str:
     safe_domain = json.dumps(selected_domain)
+    safe_gemini_key = json.dumps(clean_api_key(gemini_api_key))
 
     return f"""
     <!DOCTYPE html>
@@ -1971,6 +2102,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 border-radius: 20px;
                 padding: 18px;
                 box-shadow: 0 12px 30px rgba(2, 132, 199, 0.12);
+                position: relative;
             }}
             .rt-top-bar {{
                 display: flex;
@@ -1988,13 +2120,13 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 gap: 8px;
             }}
             .rt-select {{
-                padding: 8px 11px;
+                padding: 8px 12px;
                 border-radius: 12px;
                 border: 1.5px solid #38BDF8;
                 background: #FFFFFF;
                 color: #0369A1;
                 font-weight: 700;
-                font-size: 0.85rem;
+                font-size: 0.86rem;
                 outline: none;
                 cursor: pointer;
             }}
@@ -2044,21 +2176,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 opacity: 0.45;
                 cursor: not-allowed;
             }}
-            .rt-sensitivity-bar {{
-                display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                justify-content: space-between;
-                gap: 10px;
-                margin-top: 10px;
-                padding: 9px 14px;
-                background: #E0F2FE;
-                border-radius: 12px;
-                border: 1px solid #7DD3FC;
-                font-size: 0.83rem;
-                color: #0C4A6E;
-                font-weight: 600;
-            }}
             .rt-visualizer-row {{
                 display: flex;
                 align-items: center;
@@ -2079,7 +2196,17 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 font-size: 0.88rem;
                 font-weight: 600;
                 flex: 1;
-                min-width: 200px;
+                min-width: 220px;
+            }}
+            .dsp-badge {{
+                background: rgba(34, 197, 94, 0.2);
+                border: 1px solid #4ADE80;
+                color: #86EFAC;
+                font-size: 0.75rem;
+                font-weight: 700;
+                padding: 4px 10px;
+                border-radius: 999px;
+                white-space: nowrap;
             }}
             .pulse-dot {{
                 width: 12px;
@@ -2099,7 +2226,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 100% {{ box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }}
             }}
             #waveCanvas {{
-                width: 200px;
+                width: 190px;
                 height: 36px;
                 border-radius: 8px;
                 background: rgba(255, 255, 255, 0.06);
@@ -2108,10 +2235,9 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             .interim-box {{
                 margin-top: 12px;
                 background: #E0F2FE;
-                border: 1.5px dashed #0284C7;
-                border-radius: 12px;
+                border: 1.5px solid #38BDF8;
+                border-radius: 14px;
                 padding: 12px 16px;
-                min-height: 70px;
                 display: flex;
                 flex-direction: column;
                 gap: 8px;
@@ -2135,7 +2261,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 color: #FFFFFF;
                 font-size: 0.72rem;
                 font-weight: 700;
-                padding: 3px 10px;
+                padding: 4px 10px;
                 border-radius: 999px;
                 white-space: nowrap;
             }}
@@ -2144,18 +2270,12 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 font-size: 1.04rem;
                 font-weight: 700;
                 word-break: break-word;
-            }}
-            .interim-live-trans {{
-                color: #0369A1;
-                font-size: 0.94rem;
-                font-weight: 600;
-                padding-left: 8px;
-                border-left: 3px solid #06B6D4;
+                line-height: 1.45;
             }}
             .manual-commit-row {{
                 display: flex;
                 gap: 8px;
-                margin-top: 4px;
+                margin-top: 2px;
             }}
             .manual-input {{
                 flex: 1;
@@ -2170,14 +2290,69 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             .manual-input:focus {{
                 border-color: #0284C7;
             }}
-            .subtitle-stream {{
+            .stream-wrapper {{
+                position: relative;
                 margin-top: 12px;
-                height: 310px;
+            }}
+            .scroll-status-bar {{
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 6px 12px;
+                background: #F1F5F9;
+                border: 1px solid #CBD5E1;
+                border-bottom: none;
+                border-radius: 14px 14px 0 0;
+                font-size: 0.78rem;
+                font-weight: 700;
+                color: #334155;
+            }}
+            .scroll-lock-badge {{
+                padding: 2px 10px;
+                border-radius: 999px;
+                font-size: 0.74rem;
+                font-weight: 700;
+            }}
+            .scroll-lock-badge.auto {{
+                background: #DCFCE7;
+                color: #166534;
+                border: 1px solid #86EFAC;
+            }}
+            .scroll-lock-badge.locked {{
+                background: #FEF3C7;
+                color: #92400E;
+                border: 1px solid #FDE68A;
+            }}
+            .subtitle-stream {{
+                height: 360px;
                 overflow-y: auto;
                 background: #FFFFFF;
                 border: 1.5px solid #BAE6FD;
-                border-radius: 16px;
+                border-radius: 0 0 16px 16px;
                 padding: 14px;
+                scroll-behavior: smooth;
+            }}
+            .jump-bottom-btn {{
+                position: absolute;
+                bottom: 16px;
+                right: 24px;
+                background: linear-gradient(135deg, #0284C7 0%, #0369A1 100%);
+                color: #FFFFFF;
+                border: 2px solid #BAE6FD;
+                border-radius: 999px;
+                padding: 8px 16px;
+                font-size: 0.82rem;
+                font-weight: 800;
+                cursor: pointer;
+                box-shadow: 0 8px 20px rgba(2, 132, 199, 0.4);
+                display: none;
+                align-items: center;
+                gap: 6px;
+                z-index: 20;
+                transition: transform 0.2s ease;
+            }}
+            .jump-bottom-btn:hover {{
+                transform: translateY(-2px);
             }}
             .sub-item {{
                 background: #F8FAFC;
@@ -2186,10 +2361,10 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 border-radius: 12px;
                 padding: 12px 15px;
                 margin-bottom: 12px;
-                animation: fadeInCard 0.25s ease-out;
+                animation: fadeInCard 0.22s ease-out;
             }}
             @keyframes fadeInCard {{
-                from {{ opacity: 0; transform: translateY(6px); }}
+                from {{ opacity: 0; transform: translateY(4px); }}
                 to {{ opacity: 1; transform: translateY(0); }}
             }}
             .sub-meta {{
@@ -2207,7 +2382,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 font-weight: 600;
                 color: #0F172A;
                 margin-bottom: 7px;
-                line-height: 1.48;
+                line-height: 1.52;
             }}
             .sub-target {{
                 font-size: 1.04rem;
@@ -2216,15 +2391,15 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 background: #E0F2FE;
                 padding: 9px 13px;
                 border-radius: 10px;
-                line-height: 1.5;
+                line-height: 1.55;
                 border: 1px solid #BAE6FD;
             }}
             .empty-hint {{
                 text-align: center;
                 color: #475569;
-                padding: 50px 16px;
+                padding: 65px 16px;
                 font-size: 0.93rem;
-                line-height: 1.6;
+                line-height: 1.65;
             }}
         </style>
     </head>
@@ -2232,14 +2407,14 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
         <div class="rt-container">
             <div class="rt-top-bar">
                 <div class="rt-controls">
-                    <label style="font-weight:700; color:#0369A1; font-size:0.85rem;">Nghe:</label>
+                    <label style="font-weight:700; color:#0369A1; font-size:0.86rem;">Nghe:</label>
                     <select id="sourceLang" class="rt-select">
                         <option value="ru-RU" selected>🇷🇺 Tiếng Nga (Giảng đường)</option>
-                        <option value="vi-VN">🇻🇳 Tiếng Việt (Thử mic / Dịch sang Nga)</option>
+                        <option value="vi-VN">🇻🇳 Tiếng Việt (Giao tiếp / Thử mic)</option>
                         <option value="en-US">🇬🇧 Tiếng Anh (Bài giảng Quốc tế)</option>
                     </select>
 
-                    <label style="font-weight:700; color:#0369A1; font-size:0.85rem;">➔ Dịch:</label>
+                    <label style="font-weight:700; color:#0369A1; font-size:0.86rem;">➔ Dịch sang:</label>
                     <select id="targetLang" class="rt-select">
                         <option value="vi" selected>🇻🇳 Tiếng Việt</option>
                         <option value="ru">🇷🇺 Tiếng Nga</option>
@@ -2249,72 +2424,65 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
                 <div class="rt-controls">
                     <button id="btnStart" class="rt-btn btn-start" onclick="startRecognition()">
-                        🎙️ Bắt đầu nghe
+                        🎙️ Bắt đầu thu âm
                     </button>
-                    <button id="btnFlush" class="rt-btn btn-flush" onclick="forceCommitInterim()" title="Chốt ngay câu đang nói hoặc câu trong ô nhập xuống khung phụ đề (Phím tắt: Enter)">
-                        ➕ Chốt câu
+                    <button id="btnFlush" class="rt-btn btn-flush" onclick="forceCommitInterim()" title="Ngắt câu và dịch ngay lập tức (Phím tắt: Enter)">
+                        ➕ Ngắt câu & Dịch ngay
                     </button>
                     <button id="btnPause" class="rt-btn btn-pause" onclick="stopRecognition()" disabled>
-                        ⏸️ Dừng
+                        ⏸️ Tạm dừng
                     </button>
                     <button id="btnClear" class="rt-btn btn-clear" onclick="clearTranscript()">
-                        🗑️ Xóa
+                        🗑️ Xóa lịch sử
                     </button>
                     <button id="btnDownload" class="rt-btn btn-download" onclick="downloadTranscript()">
-                        📥 Tải (.txt)
+                        📥 Tải bản ghi (.txt)
                     </button>
-                </div>
-            </div>
-
-            <div class="rt-sensitivity-bar">
-                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                    <span>🎚️ <b>Chế độ Độ nhạy Mic:</b></span>
-                    <select id="micSensitivity" class="rt-select" onchange="updateSensitivitySettings()">
-                        <option value="ultra" selected>🔥 Cực nhạy — Giảng đường rộng / Giảng viên đứng xa (Khuyên dùng)</option>
-                        <option value="high">⚡ Nhạy cao — Phòng học tiêu chuẩn / Điện thoại</option>
-                        <option value="normal">🛡️ Cân bằng — Môi trường nhiều tiếng ồn</option>
-                    </select>
-                </div>
-                <div style="display:flex; align-items:center; gap:8px;">
-                    <label style="cursor:pointer; display:flex; align-items:center; gap:5px;">
-                        <input type="checkbox" id="preAmpToggle" checked onchange="toggleAudioPreAmp()" />
-                        <span>🔊 Khuếch đại giọng nói nhỏ (Gain Boost x3.0)</span>
-                    </label>
                 </div>
             </div>
 
             <div class="rt-visualizer-row">
                 <div class="status-indicator">
                     <div id="statusDot" class="pulse-dot"></div>
-                    <span id="statusText">Sẵn sàng — Nhấn "🎙️ Bắt đầu nghe" và nói vào Mic, hoặc bấm "➕ Chốt câu" bất kỳ lúc nào.</span>
+                    <span id="statusText">Sẵn sàng — Công nghệ DSP Khuếch đại Mic Cao cấp x4.8 & Dịch Ngữ Cảnh đã kích hoạt mặc định.</span>
                 </div>
-                <canvas id="waveCanvas" width="200" height="36"></canvas>
+                <span class="dsp-badge">🔥 DSP Gain x4.8 + Ngữ cảnh Thông minh</span>
+                <canvas id="waveCanvas" width="190" height="36"></canvas>
             </div>
 
             <div class="interim-box">
                 <div class="interim-top">
                     <div class="interim-left">
-                        <span class="interim-label">⚡ BẮT ÂM TỨC THÌ</span>
-                        <span id="interimText" class="interim-text">Hãy nhấn "Bắt đầu nghe" và nói thử...</span>
+                        <span class="interim-label">🎙️ CÂU ĐANG THU</span>
+                        <span id="interimText" class="interim-text">Nhấn "🎙️ Bắt đầu thu âm" — Hệ thống sẽ gom trọn vẹn từng câu hoàn chỉnh rồi tự động xuống dòng & dịch theo ngữ cảnh...</span>
                     </div>
                 </div>
-                <div id="interimLiveTrans" class="interim-live-trans">🌊 Bản dịch trực tiếp sẽ chạy ngay lập tức khi bạn phát âm...</div>
                 <div class="manual-commit-row">
                     <input
                         type="text"
                         id="manualSentenceInput"
                         class="manual-input"
-                        placeholder="✍️ Hoặc gõ/chỉnh sửa câu tại đây rồi bấm «➕ Chốt câu» (hoặc nhấn Enter)..."
+                        placeholder="✍️ Nội dung câu đang nói sẽ hiện ở đây (có thể chỉnh sửa hoặc nhấn Enter / «➕ Ngắt câu & Dịch ngay» bất cứ lúc nào)..."
                         onkeydown="if(event.key === 'Enter') {{ event.preventDefault(); forceCommitInterim(); }}"
                     />
                 </div>
             </div>
 
-            <div id="subtitleStream" class="subtitle-stream">
-                <div id="emptyHint" class="empty-hint">
-                    🚢 <b>Phụ đề Giảng đường Độ Nhạy Cao (Ultra-Sensitive Mic Stream)</b><br/>
-                    Khi giảng viên đang nói, bạn có thể bấm nút <b>«➕ Chốt câu»</b> bất cứ lúc nào để lập tức đẩy câu đang nói xuống khung dịch bên dưới mà không cần chờ hết nhịp nghỉ.
+            <div class="stream-wrapper">
+                <div class="scroll-status-bar">
+                    <span>📜 Lịch sử Bài giảng (Tự động liên kết ngữ cảnh các câu trước để dịch chuẩn xác)</span>
+                    <span id="scrollBadge" class="scroll-lock-badge auto">🟢 Tự động cuộn theo câu mới</span>
                 </div>
+                <div id="subtitleStream" class="subtitle-stream">
+                    <div id="emptyHint" class="empty-hint">
+                        🚢 <b>Lịch sử Thu âm & Dịch thuật theo Ngữ cảnh</b><br/>
+                        • Mỗi khi hết một câu hoàn chỉnh, hệ thống mới xuống dòng và dịch dựa trên ngữ cảnh các câu trước.<br/>
+                        • <b>Không bị nhảy trang:</b> Khi bạn lướt lên để đọc lại các câu phía trên, màn hình sẽ <b>tự động giữ nguyên vị trí</b> để bạn đọc thoải mái mà không bị nhảy xuống câu đang nói!
+                    </div>
+                </div>
+                <button id="jumpBottomBtn" class="jump-bottom-btn" onclick="resumeAutoScroll()">
+                    ⬇️ Xem câu mới nhất <span id="unreadCountBadge"></span>
+                </button>
             </div>
         </div>
 
@@ -2326,43 +2494,47 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             }} catch (e) {{}}
 
             const SELECTED_DOMAIN = {safe_domain};
+            const GEMINI_API_KEY = {safe_gemini_key};
 
             const SLANG_MAP = {{
-                "препод": "преподаватель (giảng viên)",
-                "курсач": "курсовая работа (đồ án môn học)",
-                "лаба": "лабораторная работа (bài thí nghiệm lab)",
-                "хвост": "академическая задолженность (nợ môn)",
-                "зачетка": "зачётная книжка (sổ điểm)",
-                "зачётка": "зачётная книжка (sổ điểm)",
-                "автомат": "экзамен автоматом (miễn thi)",
-                "общага": "общежитие (ký túc xá)",
-                "стипуха": "стипендия (học bổng)",
-                "сопромат": "сопротивление материалов (sức bền vật liệu)",
-                "матан": "математический анализ (giải tích)"
+                "препод": "преподаватель",
+                "курсач": "курсовая работа",
+                "лаба": "лабораторная работа",
+                "хвост": "академическая задолженность",
+                "зачетка": "зачётная книжка",
+                "зачётка": "зачётная книжка",
+                "автомат": "экзамен автоматом",
+                "общага": "общежитие",
+                "стипуха": "стипендия",
+                "сопромат": "сопротивление материалов",
+                "матан": "математический анализ"
             }};
 
             const DEFAULT_PLACEHOLDERS = [
-                "Hãy nhấn \\"Bắt đầu nghe\\" và nói thử...",
+                "Nhấn \\"🎙️ Bắt đầu thu âm\\" — Hệ thống sẽ gom trọn vẹn từng câu hoàn chỉnh rồi tự động xuống dòng & dịch theo ngữ cảnh...",
                 "...",
-                "Đã chốt câu! Đang bắt âm câu tiếp theo..."
+                "Đã chốt câu! Đang lắng nghe câu tiếp theo..."
             ];
 
             let recognition = null;
             let isListening = false;
             let isManualFlushRestart = false;
             let lectureHistory = [];
+            let finalizedSegmentBuffer = "";
             let currentInterimBuffer = "";
-            let lastUncommittedSpeech = "";
             let lastCommittedSentence = "";
             let lastCommitTimestamp = 0;
-            let autoCommitTimer = null;
-            let liveTranslateTimer = null;
+            let sentenceSilenceTimer = null;
             let lastSpeechActivity = 0;
             let waveAnimId = null;
 
-            let silenceCommitMs = 1350;
-            let maxWordsBeforeCommit = 14;
-            let liveTranslateDelayMs = 200;
+            // Quản lý cuộn thông minh: Khi người dùng lướt lên xem lịch sử, KHÔNG tự nhảy xuống đáy
+            let userScrolledUp = false;
+            let unreadNewCount = 0;
+
+            // Cấu hình chuẩn cho ngắt câu hoàn chỉnh (không cắt vụn 2-3 giây)
+            const SENTENCE_PAUSE_MS = 2350;   // Chờ nghỉ hết ý (2.35s) nếu câu chưa có dấu chấm câu
+            const PUNCTUATION_PAUSE_MS = 650; // Nếu đã có dấu . ? ! ở cuối hoặc câu đã dài hoàn chỉnh thì ngắt nhanh
 
             let audioCtx = null;
             let micStream = null;
@@ -2372,82 +2544,115 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             const statusDot = document.getElementById("statusDot");
             const statusText = document.getElementById("statusText");
             const interimText = document.getElementById("interimText");
-            const interimLiveTrans = document.getElementById("interimLiveTrans");
             const manualSentenceInput = document.getElementById("manualSentenceInput");
             const subtitleStream = document.getElementById("subtitleStream");
+            const scrollBadge = document.getElementById("scrollBadge");
+            const jumpBottomBtn = document.getElementById("jumpBottomBtn");
+            const unreadCountBadge = document.getElementById("unreadCountBadge");
             const btnStart = document.getElementById("btnStart");
-            const btnFlush = document.getElementById("btnFlush");
             const btnPause = document.getElementById("btnPause");
             const sourceLangSelect = document.getElementById("sourceLang");
             const targetLangSelect = document.getElementById("targetLang");
-            const micSensitivitySelect = document.getElementById("micSensitivity");
-            const preAmpToggle = document.getElementById("preAmpToggle");
 
-            function updateSensitivitySettings() {{
-                const mode = micSensitivitySelect.value;
-                if (mode === "ultra") {{
-                    silenceCommitMs = 1300;
-                    maxWordsBeforeCommit = 14;
-                    liveTranslateDelayMs = 180;
-                    if (gainNode) gainNode.gain.value = 3.2;
-                }} else if (mode === "high") {{
-                    silenceCommitMs = 1600;
-                    maxWordsBeforeCommit = 16;
-                    liveTranslateDelayMs = 260;
-                    if (gainNode) gainNode.gain.value = 2.2;
+            // Theo dõi thao tác lướt lên / cuộn xuống của người dùng trong khung lịch sử
+            subtitleStream.addEventListener("scroll", () => {{
+                const distanceFromBottom = subtitleStream.scrollHeight - subtitleStream.scrollTop - subtitleStream.clientHeight;
+                if (distanceFromBottom > 55) {{
+                    if (!userScrolledUp) {{
+                        userScrolledUp = true;
+                        scrollBadge.className = "scroll-lock-badge locked";
+                        scrollBadge.innerText = "🔒 Đang xem lịch sử (Đã khóa tự động nhảy dòng)";
+                        jumpBottomBtn.style.display = "inline-flex";
+                    }}
                 }} else {{
-                    silenceCommitMs = 2000;
-                    maxWordsBeforeCommit = 20;
-                    liveTranslateDelayMs = 350;
-                    if (gainNode) gainNode.gain.value = 1.4;
+                    if (userScrolledUp) {{
+                        userScrolledUp = false;
+                        unreadNewCount = 0;
+                        unreadCountBadge.innerText = "";
+                        scrollBadge.className = "scroll-lock-badge auto";
+                        scrollBadge.innerText = "🟢 Tự động cuộn theo câu mới";
+                        jumpBottomBtn.style.display = "none";
+                    }}
+                }}
+            }});
+
+            function resumeAutoScroll() {{
+                userScrolledUp = false;
+                unreadNewCount = 0;
+                unreadCountBadge.innerText = "";
+                subtitleStream.scrollTop = subtitleStream.scrollHeight;
+                scrollBadge.className = "scroll-lock-badge auto";
+                scrollBadge.innerText = "🟢 Tự động cuộn theo câu mới";
+                jumpBottomBtn.style.display = "none";
+            }}
+
+            function smartScrollToBottomIfAllowed() {{
+                if (!userScrolledUp) {{
+                    subtitleStream.scrollTop = subtitleStream.scrollHeight;
+                }} else {{
+                    unreadNewCount += 1;
+                    unreadCountBadge.innerText = `(${{unreadNewCount}} câu mới)`;
+                    jumpBottomBtn.style.display = "inline-flex";
                 }}
             }}
 
-            async function initAudioPreAmp() {{
-                if (!preAmpToggle.checked) return;
-                const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-                if (isMobile) return;
-
+            // Khởi tạo bộ khuếch đại âm thanh DSP cao cấp nhất mặc định (Gain Boost x4.8 + Voice Bandpass + Compressor)
+            async function initUltraAudioDSP() {{
                 try {{
                     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+                    if (micStream) return;
+
                     micStream = await navigator.mediaDevices.getUserMedia({{
                         audio: {{
-                            echoCancellation: true,
+                            echoCancellation: false,
                             noiseSuppression: true,
                             autoGainControl: true,
-                            channelCount: 1
+                            channelCount: 1,
+                            sampleRate: 48000
                         }}
                     }});
+
                     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
                     audioCtx = new AudioContextClass();
                     const source = audioCtx.createMediaStreamSource(micStream);
 
+                    // Lọc tạp âm trầm dưới 80Hz (tiếng quạt, điều hòa giảng đường)
                     const highpass = audioCtx.createBiquadFilter();
                     highpass.type = "highpass";
-                    highpass.frequency.value = 85;
+                    highpass.frequency.value = 80;
 
+                    // Tăng cường dải tần giọng nói con người (2500Hz Presence Boost +6dB)
+                    const voicePresence = audioCtx.createBiquadFilter();
+                    voicePresence.type = "peaking";
+                    voicePresence.frequency.value = 2400;
+                    voicePresence.Q.value = 1.0;
+                    voicePresence.gain.value = 6.5;
+
+                    // Nén động học nâng âm lượng lời nói nhỏ lên ngang bằng lời nói to
                     const compressor = audioCtx.createDynamicsCompressor();
-                    compressor.threshold.setValueAtTime(-50, audioCtx.currentTime);
+                    compressor.threshold.setValueAtTime(-55, audioCtx.currentTime);
                     compressor.knee.setValueAtTime(40, audioCtx.currentTime);
-                    compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
-                    compressor.attack.setValueAtTime(0, audioCtx.currentTime);
-                    compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+                    compressor.ratio.setValueAtTime(14, audioCtx.currentTime);
+                    compressor.attack.setValueAtTime(0.002, audioCtx.currentTime);
+                    compressor.release.setValueAtTime(0.20, audioCtx.currentTime);
 
+                    // Khuếch đại biên độ cao cấp x4.8
                     gainNode = audioCtx.createGain();
-                    gainNode.gain.value = 3.2;
+                    gainNode.gain.value = 4.8;
 
                     analyserNode = audioCtx.createAnalyser();
                     analyserNode.fftSize = 64;
-                    analyserNode.smoothingTimeConstant = 0.65;
+                    analyserNode.smoothingTimeConstant = 0.6;
 
                     source.connect(highpass);
-                    highpass.connect(compressor);
+                    highpass.connect(voicePresence);
+                    voicePresence.connect(compressor);
                     compressor.connect(gainNode);
                     gainNode.connect(analyserNode);
                 }} catch (e) {{}}
             }}
 
-            function stopAudioPreAmp() {{
+            function stopUltraAudioDSP() {{
                 try {{
                     if (micStream) {{
                         micStream.getTracks().forEach(t => t.stop());
@@ -2460,15 +2665,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     analyserNode = null;
                     gainNode = null;
                 }} catch (e) {{}}
-            }}
-
-            function toggleAudioPreAmp() {{
-                if (!isListening) return;
-                if (preAmpToggle.checked) {{
-                    initAudioPreAmp();
-                }} else {{
-                    stopAudioPreAmp();
-                }}
             }}
 
             function startReactiveWave() {{
@@ -2489,10 +2685,10 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                         analyserNode.getByteFrequencyData(freqData);
                         for (let i = 0; i < bars; i++) {{
                             const val = freqData[i % freqData.length] || 0;
-                            const h = Math.max(4, Math.min(canvas.height - 2, (val / 255) * canvas.height * 1.25));
+                            const h = Math.max(4, Math.min(canvas.height - 2, (val / 255) * canvas.height * 1.4));
                             const grad = ctx.createLinearGradient(0, canvas.height, 0, 0);
                             grad.addColorStop(0, "#0284C7");
-                            grad.addColorStop(1, "#67E8F9");
+                            grad.addColorStop(1, "#4ADE80");
                             ctx.fillStyle = grad;
                             ctx.fillRect(i * barW + 1, canvas.height - h, barW - 3, h);
                         }}
@@ -2505,7 +2701,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                             const h = Math.max(4, Math.min(canvas.height - 2, (base + jitter) * canvas.height));
                             const grad = ctx.createLinearGradient(0, canvas.height, 0, 0);
                             grad.addColorStop(0, "#0284C7");
-                            grad.addColorStop(1, "#67E8F9");
+                            grad.addColorStop(1, "#4ADE80");
                             ctx.fillStyle = grad;
                             ctx.fillRect(i * barW + 1, canvas.height - h, barW - 3, h);
                         }}
@@ -2515,48 +2711,121 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 renderWave();
             }}
 
-            async function translateSentence(text, srcLangCode, tgtLang) {{
-                const srcShort = srcLangCode.split("-")[0];
-                if (srcShort === tgtLang) return text;
+            function expandRussianSlang(text, srcShort) {{
+                if (srcShort !== "ru") return text;
+                let out = text;
+                Object.keys(SLANG_MAP).forEach(slang => {{
+                    const regex = new RegExp("\\\\b" + slang + "\\\\b", "gi");
+                    out = out.replace(regex, SLANG_MAP[slang]);
+                }});
+                return out;
+            }}
 
-                let processedText = text;
-                if (srcShort === "ru") {{
-                    Object.keys(SLANG_MAP).forEach(slang => {{
-                        const regex = new RegExp("\\\\b" + slang + "\\\\b", "gi");
-                        processedText = processedText.replace(regex, SLANG_MAP[slang]);
-                    }});
+            // Dịch câu hiện tại DỰA TRÊN NGỮ CẢNH của tối đa 3 câu liền trước
+            async function translateSentenceWithContext(currentSentence, srcLangCode, tgtLang) {{
+                const srcShort = srcLangCode.split("-")[0];
+                if (srcShort === tgtLang) return currentSentence;
+
+                const cleanCurrent = expandRussianSlang(currentSentence.trim(), srcShort);
+                const recentContextItems = lectureHistory.slice(-3);
+
+                // Ưu tiên 1: Nếu có Gemini API Key -> Dịch bằng Gemini với đầy đủ ngữ cảnh 3 câu trước và chuyên ngành
+                if (GEMINI_API_KEY && GEMINI_API_KEY.length > 10) {{
+                    try {{
+                        const contextBlock = recentContextItems.length > 0
+                            ? recentContextItems.map((item, i) => `[Câu trước ${{i+1}}]: ${{item.source}} -> ${{item.translated}}`).join("\\n")
+                            : "Chưa có câu trước (đây là câu mở đầu).";
+
+                        const prompt = `Bạn là trợ lý dịch cabin bài giảng đại học chuyên ngành ${{SELECTED_DOMAIN}}.
+Ngữ cảnh các câu ngay trước đó:
+${{contextBlock}}
+
+Hãy dịch câu tiếp theo sau đây từ tiếng ${{srcShort}} sang tiếng ${{tgtLang}} sao cho liền mạch, chuẩn xác theo ngữ cảnh các câu trước và đúng thuật ngữ chuyên ngành.
+CHỈ TRẢ VỀ đúng nội dung câu dịch (không giải thích thêm, không ngoặc kép):
+${{cleanCurrent}}`;
+
+                        const gemUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${{encodeURIComponent(GEMINI_API_KEY)}}`;
+                        const gemRes = await fetch(gemUrl, {{
+                            method: "POST",
+                            headers: {{ "Content-Type": "application/json" }},
+                            body: JSON.stringify({{
+                                contents: [{{ parts: [{{ text: prompt }}] }}],
+                                generationConfig: {{ temperature: 0.15 }}
+                            }})
+                        }});
+                        if (gemRes.ok) {{
+                            const gemData = await gemRes.json();
+                            const textOut = gemData?.candidates?.[0]?.content?.parts?.[0]?.text;
+                            if (textOut && textOut.trim().length > 0) {{
+                                return textOut.trim();
+                            }}
+                        }}
+                    }} catch (e) {{}}
                 }}
 
-                // Cổng 1: Google GTX
+                // Ưu tiên 2: Dịch qua Google GTX kèm ngữ cảnh câu liền trước (sử dụng vách ngăn ngữ cảnh " ||| ")
                 try {{
-                    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${{srcShort}}&tl=${{tgtLang}}&dt=t&q=${{encodeURIComponent(processedText)}}`;
+                    let queryPayload = cleanCurrent;
+                    const hasContext = recentContextItems.length > 0;
+                    if (hasContext) {{
+                        const prevSources = recentContextItems.slice(-2).map(it => expandRussianSlang(it.source, srcShort)).join(". ");
+                        queryPayload = prevSources + " ||| " + cleanCurrent;
+                    }}
+
+                    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${{srcShort}}&tl=${{tgtLang}}&dt=t&q=${{encodeURIComponent(queryPayload)}}`;
                     const res = await fetch(url);
                     const data = await res.json();
                     if (Array.isArray(data) && Array.isArray(data[0])) {{
-                        return data[0].map(item => item[0]).join("");
+                        const fullTranslated = data[0].map(item => item[0]).join("");
+                        if (hasContext && fullTranslated.includes("|||")) {{
+                            const parts = fullTranslated.split("|||");
+                            const contextualResult = parts[parts.length - 1].trim();
+                            if (contextualResult.length > 0) return contextualResult;
+                        }} else if (!hasContext && fullTranslated.trim().length > 0) {{
+                            return fullTranslated.trim();
+                        }}
                     }}
                 }} catch (err) {{}}
 
-                // Cổng 2: MyMemory dự phòng
+                // Ưu tiên 3: Dịch trực tiếp câu đơn qua GTX nếu vách ngăn bị gộp
                 try {{
-                    const mmUrl = `https://api.mymemory.translated.net/get?q=${{encodeURIComponent(processedText.slice(0, 450))}}&langpair=${{srcShort}}|${{tgtLang}}`;
-                    const res2 = await fetch(mmUrl);
-                    const data2 = await res2.json();
-                    if (data2 && data2.responseData && data2.responseData.translatedText) {{
-                        return data2.responseData.translatedText;
+                    const urlSingle = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${{srcShort}}&tl=${{tgtLang}}&dt=t&q=${{encodeURIComponent(cleanCurrent)}}`;
+                    const resSingle = await fetch(urlSingle);
+                    const dataSingle = await resSingle.json();
+                    if (Array.isArray(dataSingle) && Array.isArray(dataSingle[0])) {{
+                        return dataSingle[0].map(item => item[0]).join("");
                     }}
                 }} catch (err2) {{}}
+
+                // Ưu tiên 4: MyMemory dự phòng
+                try {{
+                    const mmUrl = `https://api.mymemory.translated.net/get?q=${{encodeURIComponent(cleanCurrent.slice(0, 450))}}&langpair=${{srcShort}}|${{tgtLang}}`;
+                    const res3 = await fetch(mmUrl);
+                    const data3 = await res3.json();
+                    if (data3 && data3.responseData && data3.responseData.translatedText) {{
+                        return data3.responseData.translatedText;
+                    }}
+                }} catch (err3) {{}}
 
                 return "[Đang chờ kết nối dịch tự động...]";
             }}
 
-            function appendSubtitleCard(originalText, srcLangCode, tgtLang) {{
-                const cleanOrig = (originalText || "").trim();
-                if (!cleanOrig) return;
+            function formatCompleteSentence(raw) {{
+                let s = (raw || "").replace(/\\s+/g, " ").trim();
+                if (!s) return "";
+                s = s.charAt(0).toUpperCase() + s.slice(1);
+                if (!/[.?!…]$/.test(s)) {{
+                    s += ".";
+                }}
+                return s;
+            }}
 
-                // Chống trùng lặp nếu cùng 1 câu bị chốt 2 lần liên tiếp trong < 1.2 giây
+            function appendSubtitleCard(originalText, srcLangCode, tgtLang) {{
+                const cleanOrig = formatCompleteSentence(originalText);
+                if (!cleanOrig || cleanOrig === ".") return;
+
                 const nowMs = Date.now();
-                if (cleanOrig === lastCommittedSentence && (nowMs - lastCommitTimestamp) < 1200) {{
+                if (cleanOrig === lastCommittedSentence && (nowMs - lastCommitTimestamp) < 1500) {{
                     return;
                 }}
                 lastCommittedSentence = cleanOrig;
@@ -2567,22 +2836,27 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
                 const now = new Date();
                 const timeStr = now.toLocaleTimeString("vi-VN", {{ hour: "2-digit", minute: "2-digit", second: "2-digit" }});
+                const sentenceIndex = lectureHistory.length + 1;
                 const itemId = "sub-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
+                const contextCount = Math.min(3, lectureHistory.length);
+                const contextNote = contextCount > 0 ? `🔗 Ngữ cảnh +${{contextCount}} câu trước` : `⚓ Câu mở đầu`;
 
                 const card = document.createElement("div");
                 card.className = "sub-item";
                 card.innerHTML = `
                     <div class="sub-meta">
-                        <span>🕒 ${{timeStr}} • Nguồn: ${{srcLangCode}}</span>
-                        <span>⚓ ${{SELECTED_DOMAIN}}</span>
+                        <span>#${{sentenceIndex}} • 🕒 ${{timeStr}} (${{srcLangCode}})</span>
+                        <span>${{contextNote}} • ${{SELECTED_DOMAIN}}</span>
                     </div>
                     <div class="sub-source">🗣️ ${{cleanOrig}}</div>
-                    <div id="${{itemId}}" class="sub-target">⏳ Đang dịch tức thì...</div>
+                    <div id="${{itemId}}" class="sub-target">⏳ Đang dịch chuẩn ngữ cảnh...</div>
                 `;
                 subtitleStream.appendChild(card);
-                subtitleStream.scrollTop = subtitleStream.scrollHeight;
 
-                translateSentence(cleanOrig, srcLangCode, tgtLang).then(translated => {{
+                // Chỉ tự cuộn nếu người dùng KHÔNG lướt lên đọc lịch sử
+                smartScrollToBottomIfAllowed();
+
+                translateSentenceWithContext(cleanOrig, srcLangCode, tgtLang).then(translated => {{
                     const targetEl = document.getElementById(itemId);
                     if (targetEl) {{
                         targetEl.innerHTML = `🌊 ${{translated}}`;
@@ -2592,85 +2866,69 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                         source: cleanOrig,
                         translated: translated
                     }});
-                    subtitleStream.scrollTop = subtitleStream.scrollHeight;
+                    if (!userScrolledUp) {{
+                        subtitleStream.scrollTop = subtitleStream.scrollHeight;
+                    }}
                 }});
             }}
 
+            function getFullActiveSentenceBuffer() {{
+                return ((finalizedSegmentBuffer ? finalizedSegmentBuffer + " " : "") + currentInterimBuffer).replace(/\\s+/g, " ").trim();
+            }}
+
             function forceCommitInterim() {{
-                if (autoCommitTimer) {{
-                    clearTimeout(autoCommitTimer);
-                    autoCommitTimer = null;
+                if (sentenceSilenceTimer) {{
+                    clearTimeout(sentenceSilenceTimer);
+                    sentenceSilenceTimer = null;
                 }}
 
-                // Ưu tiên 1: Nội dung người dùng gõ hoặc đang được đồng bộ trong ô manualSentenceInput
-                let candidate = (manualSentenceInput && manualSentenceInput.value ? manualSentenceInput.value.trim() : "");
-
-                // Ưu tiên 2: Bộ đệm giọng nói đang thu dở (currentInterimBuffer)
-                if (!candidate && currentInterimBuffer.trim().length > 0) {{
-                    candidate = currentInterimBuffer.trim();
+                let candidate = "";
+                if (manualSentenceInput && manualSentenceInput.value.trim().length > 0) {{
+                    candidate = manualSentenceInput.value.trim();
+                }} else {{
+                    candidate = getFullActiveSentenceBuffer();
                 }}
 
-                // Ưu tiên 3: Câu vừa nhận diện gần nhất chưa kịp chốt (lastUncommittedSpeech)
-                if (!candidate && lastUncommittedSpeech.trim().length > 0) {{
-                    candidate = lastUncommittedSpeech.trim();
-                }}
-
-                // Ưu tiên 4: Lấy trực tiếp từ DOM #interimText nếu không phải dòng hướng dẫn mặc định
                 if (!candidate && interimText) {{
                     const domText = (interimText.innerText || "").trim();
-                    if (domText && !DEFAULT_PLACEHOLDERS.includes(domText) && !domText.startsWith("Hãy nhấn")) {{
+                    if (domText && !DEFAULT_PLACEHOLDERS.includes(domText) && !domText.startsWith("Nhấn")) {{
                         candidate = domText;
                     }}
                 }}
 
                 if (candidate && candidate.length > 0) {{
+                    finalizedSegmentBuffer = "";
                     currentInterimBuffer = "";
-                    lastUncommittedSpeech = "";
                     if (manualSentenceInput) manualSentenceInput.value = "";
-                    interimText.innerText = "Đã chốt câu! Đang bắt âm câu tiếp theo...";
-                    interimLiveTrans.innerText = "🌊 Đã chuyển câu xuống khung phụ đề bên dưới!";
+                    interimText.innerText = "Đã chốt câu! Đang lắng nghe câu tiếp theo...";
 
                     appendSubtitleCard(candidate, sourceLangSelect.value, targetLangSelect.value);
 
-                    // Làm mới phiên nhận diện để xóa buffer cũ của Web Speech API mà không làm gián đoạn thu âm
                     if (isListening && recognition) {{
                         isManualFlushRestart = true;
                         try {{ recognition.stop(); }} catch (e) {{}}
                     }}
                 }} else {{
-                    // Thông báo trực quan trên thanh trạng thái khi chưa có từ nào để chốt
                     const prevStatus = statusText.innerText;
-                    statusText.innerText = "💡 Chưa có câu đang nói dở! Hãy nói vào Mic hoặc gõ câu vào ô bên dưới rồi bấm «➕ Chốt câu».";
+                    statusText.innerText = "💡 Chưa có câu đang nói! Hãy nói vào Mic hoặc gõ câu vào ô bên dưới rồi nhấn Enter.";
                     if (manualSentenceInput) manualSentenceInput.focus();
                     setTimeout(() => {{
                         if (isListening) {{
-                            statusText.innerText = `🟢 Đang nghe độ nhạy cao (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Hãy nói vào Mic...`;
+                            statusText.innerText = `🟢 Đang thu âm DSP Siêu Nhạy (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Cứ hết câu máy sẽ tự xuống dòng & dịch...`;
                         }} else {{
                             statusText.innerText = prevStatus;
                         }}
-                    }}, 2800);
+                    }}, 2500);
                 }}
-            }}
-
-            function scheduleLiveInterimTranslation(text) {{
-                if (liveTranslateTimer) clearTimeout(liveTranslateTimer);
-                liveTranslateTimer = setTimeout(() => {{
-                    if (!text || text.trim().length < 2) return;
-                    translateSentence(text.trim(), sourceLangSelect.value, targetLangSelect.value).then(trans => {{
-                        if (currentInterimBuffer.trim().length > 0 || lastUncommittedSpeech.trim().length > 0) {{
-                            interimLiveTrans.innerText = "🌊 Dịch trực tiếp: " + trans;
-                        }}
-                    }});
-                }}, liveTranslateDelayMs);
             }}
 
             function pickBestTranscript(resultItem) {{
                 if (!resultItem || resultItem.length === 0) return "";
                 let bestText = resultItem[0].transcript || "";
-                let bestScore = (resultItem[0].confidence || 0.5) * Math.max(1, bestText.trim().length);
+                let bestScore = (resultItem[0].confidence || 0.6) * Math.max(1, bestText.trim().length);
                 for (let k = 1; k < resultItem.length; k++) {{
                     const candText = resultItem[k].transcript || "";
-                    const conf = resultItem[k].confidence || 0.5;
+                    const conf = resultItem[k].confidence || 0.6;
                     const score = conf * Math.max(1, candText.trim().length * 1.05);
                     if (candText.trim().length > bestText.trim().length && score >= bestScore * 0.85) {{
                         bestText = candText;
@@ -2683,25 +2941,24 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             async function startRecognition() {{
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (!SpeechRecognition) {{
-                    statusText.innerText = "⚠️ Trình duyệt chưa hỗ trợ Web Speech API. Hãy mở bằng Google Chrome / Edge hoặc gõ vào ô bên dưới và bấm Chốt câu!";
+                    statusText.innerText = "⚠️ Trình duyệt chưa hỗ trợ Web Speech API. Hãy mở bằng Google Chrome / Edge hoặc gõ vào ô bên dưới!";
                     return;
                 }}
 
                 if (isListening) return;
-                updateSensitivitySettings();
-                await initAudioPreAmp();
+                await initUltraAudioDSP();
 
                 try {{
                     recognition = new SpeechRecognition();
                     recognition.lang = sourceLangSelect.value;
                     recognition.continuous = true;
                     recognition.interimResults = true;
-                    recognition.maxAlternatives = 3;
+                    recognition.maxAlternatives = 5;
 
                     recognition.onstart = () => {{
                         isListening = true;
                         statusDot.classList.add("active");
-                        statusText.innerText = `🟢 Đang nghe độ nhạy cao (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Hãy nói vào Mic...`;
+                        statusText.innerText = `🟢 Đang thu âm DSP Siêu Nhạy (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Cứ hết câu máy sẽ tự xuống dòng & dịch...`;
                         btnStart.disabled = true;
                         btnPause.disabled = false;
                         startReactiveWave();
@@ -2709,45 +2966,52 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
                     recognition.onresult = (event) => {{
                         lastSpeechActivity = Date.now();
-                        let interimTranscript = "";
+                        let newInterim = "";
 
                         for (let i = event.resultIndex; i < event.results.length; ++i) {{
                             const transcript = pickBestTranscript(event.results[i]);
                             if (event.results[i].isFinal) {{
-                                const finalSentence = transcript.trim();
-                                if (finalSentence.length > 0) {{
-                                    currentInterimBuffer = "";
-                                    lastUncommittedSpeech = "";
-                                    if (manualSentenceInput) manualSentenceInput.value = "";
-                                    if (autoCommitTimer) clearTimeout(autoCommitTimer);
-                                    appendSubtitleCard(finalSentence, sourceLangSelect.value, targetLangSelect.value);
+                                const piece = transcript.trim();
+                                if (piece.length > 0) {{
+                                    finalizedSegmentBuffer = ((finalizedSegmentBuffer ? finalizedSegmentBuffer + " " : "") + piece).replace(/\\s+/g, " ").trim();
                                 }}
-                                interimText.innerText = "...";
-                                interimLiveTrans.innerText = "🌊 Đang nghe câu tiếp theo...";
                             }} else {{
-                                interimTranscript += transcript;
+                                newInterim += transcript;
                             }}
                         }}
 
-                        if (interimTranscript.trim().length > 0) {{
-                            currentInterimBuffer = interimTranscript.trim();
-                            lastUncommittedSpeech = currentInterimBuffer;
-                            interimText.innerText = currentInterimBuffer;
-                            if (manualSentenceInput) {{
-                                manualSentenceInput.value = currentInterimBuffer;
-                            }}
-                            scheduleLiveInterimTranslation(currentInterimBuffer);
+                        currentInterimBuffer = newInterim.trim();
+                        const combinedSentence = getFullActiveSentenceBuffer();
 
-                            if (autoCommitTimer) clearTimeout(autoCommitTimer);
-                            const wordCount = currentInterimBuffer.split(/\\s+/).length;
-                            if (wordCount >= maxWordsBeforeCommit) {{
-                                forceCommitInterim();
+                        if (combinedSentence.length > 0) {{
+                            interimText.innerText = combinedSentence;
+                            if (manualSentenceInput) {{
+                                manualSentenceInput.value = combinedSentence;
+                            }}
+
+                            if (sentenceSilenceTimer) clearTimeout(sentenceSilenceTimer);
+
+                            const wordCount = combinedSentence.split(/\\s+/).length;
+                            const hasEndPunctuation = /[.?!…]\\s*$/.test(combinedSentence);
+
+                            // Chỉ tự động ngắt ngay khi:
+                            // 1) Đã có dấu kết thúc câu (. ? !) và người nói đã dừng mảnh hiện tại
+                            // 2) Hoặc mệnh đề đã được Web Speech xác nhận kết thúc (isFinal) và đủ độ dài câu hoàn chỉnh (>= 12 từ)
+                            if (hasEndPunctuation && currentInterimBuffer.length === 0 && wordCount >= 3) {{
+                                sentenceSilenceTimer = setTimeout(() => {{
+                                    forceCommitInterim();
+                                }}, PUNCTUATION_PAUSE_MS);
+                            }} else if (currentInterimBuffer.length === 0 && finalizedSegmentBuffer.length > 0 && wordCount >= 12) {{
+                                sentenceSilenceTimer = setTimeout(() => {{
+                                    forceCommitInterim();
+                                }}, PUNCTUATION_PAUSE_MS);
                             }} else {{
-                                autoCommitTimer = setTimeout(() => {{
-                                    if (currentInterimBuffer.trim().length > 0) {{
+                                // Chờ người nói kết thúc trọn vẹn câu (nghỉ 2.35s) mới chốt câu để không nhảy liên tục 2-3s
+                                sentenceSilenceTimer = setTimeout(() => {{
+                                    if (getFullActiveSentenceBuffer().length > 0) {{
                                         forceCommitInterim();
                                     }}
-                                }}, silenceCommitMs);
+                                }}, SENTENCE_PAUSE_MS);
                             }}
                         }}
                     }};
@@ -2760,16 +3024,20 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                             statusText.innerText = "❌ Không tìm thấy thiết bị Microphone!";
                             stopRecognition();
                         }} else if (event.error === "no-speech") {{
-                            statusText.innerText = "🟢 Mic đang mở ở chế độ Siêu Nhạy (Đang chờ phát hiện giọng nói...)";
+                            statusText.innerText = "🟢 Mic DSP Siêu Nhạy đang lắng nghe (Hãy nói bình thường, không cần nói to)...";
                         }}
                     }};
 
                     recognition.onend = () => {{
-                        if (!isManualFlushRestart && currentInterimBuffer.trim().length > 0) {{
-                            appendSubtitleCard(currentInterimBuffer.trim(), sourceLangSelect.value, targetLangSelect.value);
-                            currentInterimBuffer = "";
-                            lastUncommittedSpeech = "";
-                            if (manualSentenceInput) manualSentenceInput.value = "";
+                        if (!isManualFlushRestart && getFullActiveSentenceBuffer().length > 0) {{
+                            // Nếu trình duyệt tự ngắt phiên khi câu đã khá dài thì chốt câu luôn
+                            const pending = getFullActiveSentenceBuffer();
+                            if (pending.split(/\\s+/).length >= 5) {{
+                                finalizedSegmentBuffer = "";
+                                currentInterimBuffer = "";
+                                if (manualSentenceInput) manualSentenceInput.value = "";
+                                appendSubtitleCard(pending, sourceLangSelect.value, targetLangSelect.value);
+                            }}
                         }}
                         isManualFlushRestart = false;
                         if (isListening) {{
@@ -2780,7 +3048,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                                         recognition.start();
                                     }} catch (e) {{}}
                                 }}
-                            }}, 50);
+                            }}, 40);
                         }}
                     }};
 
@@ -2799,36 +3067,41 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
             function stopRecognition() {{
                 isListening = false;
-                if (autoCommitTimer) clearTimeout(autoCommitTimer);
-                if (currentInterimBuffer.trim().length > 0) {{
-                    appendSubtitleCard(currentInterimBuffer.trim(), sourceLangSelect.value, targetLangSelect.value);
+                if (sentenceSilenceTimer) clearTimeout(sentenceSilenceTimer);
+                const remaining = getFullActiveSentenceBuffer();
+                if (remaining.length > 0) {{
+                    finalizedSegmentBuffer = "";
                     currentInterimBuffer = "";
-                    lastUncommittedSpeech = "";
                     if (manualSentenceInput) manualSentenceInput.value = "";
+                    appendSubtitleCard(remaining, sourceLangSelect.value, targetLangSelect.value);
                 }}
                 if (recognition) {{
                     try {{ recognition.stop(); }} catch (e) {{}}
                 }}
-                stopAudioPreAmp();
+                stopUltraAudioDSP();
                 if (waveAnimId) cancelAnimationFrame(waveAnimId);
                 statusDot.classList.remove("active");
-                statusText.innerText = "⏸️ Đã tạm dừng thu âm. Bạn vẫn có thể bấm «➕ Chốt câu» hoặc tải bài giảng về máy.";
+                statusText.innerText = "⏸️ Đã tạm dừng thu âm. Bạn có thể lướt xem lại toàn bộ lịch sử bài giảng hoặc tải file về máy.";
                 btnStart.disabled = false;
                 btnPause.disabled = true;
             }}
 
             function clearTranscript() {{
                 lectureHistory = [];
+                finalizedSegmentBuffer = "";
                 currentInterimBuffer = "";
-                lastUncommittedSpeech = "";
+                unreadNewCount = 0;
+                userScrolledUp = false;
                 if (manualSentenceInput) manualSentenceInput.value = "";
+                jumpBottomBtn.style.display = "none";
+                scrollBadge.className = "scroll-lock-badge auto";
+                scrollBadge.innerText = "🟢 Tự động cuộn theo câu mới";
                 subtitleStream.innerHTML = `
                     <div id="emptyHint" class="empty-hint">
-                        🚢 Đã xóa màn hình. Nhấn <b>Bắt đầu nghe</b> để ghi nhận bài giảng mới.
+                        🚢 Đã xóa lịch sử. Nhấn <b>🎙️ Bắt đầu thu âm</b> để ghi nhận bài giảng mới.
                     </div>
                 `;
                 interimText.innerText = "...";
-                interimLiveTrans.innerText = "🌊 Bản dịch tạm thời sẽ hiện ngay tại đây...";
             }}
 
             function downloadTranscript() {{
@@ -2843,9 +3116,9 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 content += "==========================================================\\n\\n";
 
                 lectureHistory.forEach((item, idx) => {{
-                    content += `[${{idx + 1}}] Thời gian: ${{item.time}}\\n`;
-                    content += `🗣️ Lời giảng gốc : ${{item.source}}\\n`;
-                    content += `🌊 Bản dịch      : ${{item.translated}}\\n`;
+                    content += `[Câu ${{idx + 1}}] Thời gian: ${{item.time}}\\n`;
+                    content += `🗣️ Câu gốc  : ${{item.source}}\\n`;
+                    content += `🌊 Bản dịch : ${{item.translated}}\\n`;
                     content += "----------------------------------------------------------\\n";
                 }});
 
@@ -2867,9 +3140,10 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
 
 # ==============================================================================
-# 7. XỬ LÝ THU ÂM BẰNG PYTHON THUẦN (DÙNG ARRAY CHUẨN PYTHON 3.13)
+# 7. XỬ LÝ THU ÂM BẰNG PYTHON THUẦN (TỰ ĐỘNG CHUẨN HÓA & KHUẾCH ĐẠI CAO CẤP X4.5)
 # ==============================================================================
-def boost_wav_audio_bytes(audio_bytes: bytes, gain_factor: float = 2.8) -> bytes:
+def boost_wav_audio_bytes(audio_bytes: bytes, max_gain_factor: float = 4.5) -> bytes:
+    """Tự động chuẩn hóa biên độ âm thanh (Auto-Normalizer DSP) giúp tiếng nói nhỏ rõ nét."""
     try:
         with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
             params = wf.getparams()
@@ -2884,9 +3158,9 @@ def boost_wav_audio_bytes(audio_bytes: bytes, gain_factor: float = 2.8) -> bytes
 
             max_amp = max(abs(x) for x in samples)
             if max_amp > 0:
-                auto_gain = min(gain_factor, max(1.2, 28500.0 / max_amp))
+                auto_gain = min(max_gain_factor, max(1.6, 30000.0 / max_amp))
             else:
-                auto_gain = gain_factor
+                auto_gain = max_gain_factor
 
             for i in range(len(samples)):
                 val = int(samples[i] * auto_gain)
@@ -2909,24 +3183,24 @@ def transcribe_and_translate_audio_bytes(
     audio_bytes: bytes,
     source_lang_speech: str,
     target_lang_trans: str,
-    sensitivity_gain: float = 2.8,
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     if sr is None:
         return None, None, "Thư viện SpeechRecognition chưa được cài đặt trong requirements.txt."
 
     recognizer = sr.Recognizer()
-    recognizer.energy_threshold = 90
+    # Cấu hình độ nhạy cao nhất mặc định
+    recognizer.energy_threshold = 45
     recognizer.dynamic_energy_threshold = True
-    recognizer.dynamic_energy_adjustment_damping = 0.10
-    recognizer.dynamic_energy_ratio = 1.15
-    recognizer.pause_threshold = 0.85
-    recognizer.non_speaking_duration = 0.4
+    recognizer.dynamic_energy_adjustment_damping = 0.08
+    recognizer.dynamic_energy_ratio = 1.1
+    recognizer.pause_threshold = 1.2
+    recognizer.non_speaking_duration = 0.5
 
-    boosted_bytes = boost_wav_audio_bytes(audio_bytes, gain_factor=sensitivity_gain)
+    boosted_bytes = boost_wav_audio_bytes(audio_bytes, max_gain_factor=4.5)
 
     try:
         with sr.AudioFile(io.BytesIO(boosted_bytes)) as source:
-            recognizer.adjust_for_ambient_noise(source, duration=0.15)
+            recognizer.adjust_for_ambient_noise(source, duration=0.1)
             audio_data = recognizer.record(source)
 
         transcript = recognizer.recognize_google(audio_data, language=source_lang_speech)
@@ -2934,25 +3208,25 @@ def transcribe_and_translate_audio_bytes(
         translated = fast_free_translate(transcript, src_short, target_lang_trans)
         return transcript, translated, None
     except sr.UnknownValueError:
-        return None, None, "Không nhận diện được lời nói trong đoạn âm thanh (hãy thử kéo thanh Khuếch đại Mic lên mức cao hơn)."
+        return None, None, "Không nhận diện được lời nói trong đoạn thu âm (vui lòng kiểm tra lại thiết bị Micro)."
     except sr.RequestError as e:
         return None, None, f"Không thể kết nối tới dịch vụ nhận diện giọng nói: {e}"
     except Exception as e:
         return (
             None,
             None,
-            f"Định dạng âm thanh chưa tương thích trực tiếp (hãy ưu tiên thu âm trực tiếp hoặc file .WAV). Chi tiết: {e}",
+            f"Định dạng âm thanh chưa tương thích trực tiếp (ưu tiên thu âm trực tiếp hoặc tải file .WAV). Chi tiết: {e}",
         )
 
 
 # ==============================================================================
-# 8. GIAO DIỆN CHÍNH (SIDEBAR + FORM NGƯỜI DÙNG + LƯU CỐ ĐỊNH KEY + 2 TAB CHỨC NĂNG)
+# 8. GIAO DIỆN CHÍNH (SIDEBAR + LƯU CỐ ĐỊNH THÔNG TIN SINH VIÊN & KEY + 2 TAB)
 # ==============================================================================
 def main() -> None:
     if "input_text_area" not in st.session_state:
         st.session_state["input_text_area"] = ""
 
-    # Kiểm tra quyền Tác giả (qua URL ?admin=minh1106 hoặc qua hộp mở khóa ở cuối Sidebar)
+    # Kiểm tra quyền Tác giả
     if "is_author_admin" not in st.session_state:
         st.session_state["is_author_admin"] = False
     try:
@@ -2961,7 +3235,7 @@ def main() -> None:
     except Exception:
         pass
 
-    # Nạp Gemini API Key đã lưu cố định (nếu có)
+    # 1. Nạp Gemini API Key đã lưu cố định (nếu có)
     persisted_key = load_saved_api_key_from_store()
     if "saved_gemini_api_key" not in st.session_state:
         st.session_state["saved_gemini_api_key"] = persisted_key
@@ -2971,10 +3245,21 @@ def main() -> None:
     if "declined_keys" not in st.session_state:
         st.session_state["declined_keys"] = set()
 
-    # Tự động kiểm tra localStorage trên trình duyệt ở lần tải đầu tiên
-    if not st.session_state["saved_gemini_api_key"] and not st.session_state.get("ls_sync_checked"):
+    # 2. Nạp Thông tin Sinh viên đã lưu cố định (nếu đã nhập từ các lần trước)
+    saved_profile = load_saved_student_profile()
+    if saved_profile:
+        st.session_state["confirmed_user_name"] = saved_profile.get("full_name", "")
+        st.session_state["confirmed_user_year"] = saved_profile.get("student_year", "Sinh viên Năm 4")
+        st.session_state["confirmed_user_uni"] = saved_profile.get("university", "")
+
+    if "editing_student_profile" not in st.session_state:
+        st.session_state["editing_student_profile"] = False
+
+    # Tự động đồng bộ localStorage (cả Key và Hồ sơ Sinh viên) ở lần tải đầu tiên
+    if not st.session_state.get("ls_sync_checked"):
         st.session_state["ls_sync_checked"] = True
-        inject_localstorage_key_sync(action="load")
+        if not st.session_state.get("saved_gemini_api_key") or not st.session_state.get("confirmed_user_name"):
+            inject_localstorage_sync(action="load_all")
 
     inject_ocean_blue_css(is_author_admin=st.session_state["is_author_admin"])
     avatar_uri = get_author_avatar_data_uri()
@@ -2998,7 +3283,7 @@ def main() -> None:
             """
         )
 
-        # 2. FORM NHẬP HỌ TÊN NGƯỜI DÙNG (NẰM NGAY DƯỚI PHẦN GIỚI THIỆU TÁC GIẢ)
+        # 2. THÔNG TIN SINH VIÊN SỬ DỤNG (TỰ ĐỘNG LƯU CỐ ĐỊNH CHO CÁC LẦN SAU)
         render_html(
             """
             <div class="user-checkin-card">
@@ -3006,68 +3291,109 @@ def main() -> None:
                     👤 Thông tin Sinh viên sử dụng
                 </div>
                 <div style="font-size:0.76rem; color:#E0F2FE; line-height:1.35;">
-                    Nhập thông tin kết nối cộng đồng sinh viên Việt tại Nga (gửi thông báo tới tác giả Mai Văn Minh):
+                    Chỉ cần nhập 1 lần — Hệ thống tự động lưu lại cho tất cả các lần sử dụng sau:
                 </div>
             </div>
             """
         )
 
-        with st.form("student_user_checkin_form", clear_on_submit=False):
-            user_full_name = st.text_input(
-                "✍️ Họ và tên của bạn:",
-                value=st.session_state.get("confirmed_user_name", ""),
-                placeholder="VD: Nguyễn Văn A",
-            )
-            user_student_year = st.selectbox(
-                "🎓 Sinh viên năm mấy:",
-                options=[
-                    "Dự bị tiếng Nga (Подфак)",
-                    "Sinh viên Năm 1",
-                    "Sinh viên Năm 2",
-                    "Sinh viên Năm 3",
-                    "Sinh viên Năm 4",
-                    "Sinh viên Năm 5 (Специалитет)",
-                    "Cao học / Thạc sĩ (Магистратура)",
-                    "Nghiên cứu sinh (Аспирантура)",
-                    "Khác / Đã tốt nghiệp",
-                ],
-                index=3,
-            )
-            user_university = st.text_input(
-                "🏫 Học ở trường nào:",
-                value=st.session_state.get("confirmed_user_uni", ""),
-                placeholder="VD: СПбГМТУ, ИТМО, СПбГУ, МГТУ...",
-            )
-            confirm_user_btn = st.form_submit_button("✅ Xác nhận thông tin", use_container_width=True, type="primary")
+        has_confirmed_profile = bool(
+            st.session_state.get("confirmed_user_name") and st.session_state.get("confirmed_user_uni")
+        )
 
-        if confirm_user_btn:
-            if not user_full_name.strip() or not user_university.strip():
-                st.warning("⚠️ Bạn vui lòng nhập đầy đủ **Họ và tên** và **Tên trường đang theo học** nhé!")
-            else:
-                st.session_state["confirmed_user_name"] = user_full_name.strip()
-                st.session_state["confirmed_user_year"] = user_student_year
-                st.session_state["confirmed_user_uni"] = user_university.strip()
-                with st.spinner("📨 Đang xác nhận & gửi thông báo tới email tác giả..."):
-                    sent_ok, relay_name = send_user_notification_email(
-                        full_name=user_full_name.strip(),
-                        student_year=user_student_year,
-                        university=user_university.strip(),
-                    )
-                    trigger_client_side_email_relay(
-                        full_name=user_full_name.strip(),
-                        student_year=user_student_year,
-                        university=user_university.strip(),
-                    )
-                st.success(
-                    f"🎉 Xin chào **{user_full_name.strip()}** ({user_student_year} — {user_university.strip()})! "
-                    f"Đã gửi thông báo về email tác giả (`{AUTHOR_NOTIFICATION_EMAIL}`)."
+        # Nếu đã lưu thông tin và không bấm "Đổi thông tin" -> Hiển thị thẻ đã lưu gọn gàng
+        if has_confirmed_profile and not st.session_state["editing_student_profile"]:
+            sv_name = st.session_state["confirmed_user_name"]
+            sv_year = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
+            sv_uni = st.session_state["confirmed_user_uni"]
+
+            render_html(
+                f"""
+                <div class="saved-student-badge-box">
+                    <div style="font-size:0.76rem; color:#A7F3D0; font-weight:700; margin-bottom:3px;">
+                        ✅ ĐÃ LƯU THÔNG TIN CỐ ĐỊNH
+                    </div>
+                    <div style="font-size:0.98rem; font-weight:800; color:#FFFFFF;">
+                        🎓 {sv_name}
+                    </div>
+                    <div style="font-size:0.82rem; color:#E0F2FE; margin-top:2px;">
+                        • {sv_year}<br/>
+                        • Trường: <b>{sv_uni}</b>
+                    </div>
+                </div>
+                """
+            )
+            if st.button("✏️ Đổi / Cập nhật thông tin sinh viên", key="btn_edit_student_info", use_container_width=True):
+                st.session_state["editing_student_profile"] = True
+                st.rerun()
+        else:
+            default_year_idx = 3
+            cur_year = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
+            if cur_year in STUDENT_YEAR_OPTIONS:
+                default_year_idx = STUDENT_YEAR_OPTIONS.index(cur_year)
+
+            with st.form("student_user_checkin_form", clear_on_submit=False):
+                user_full_name = st.text_input(
+                    "✍️ Họ và tên của bạn:",
+                    value=st.session_state.get("confirmed_user_name", ""),
+                    placeholder="VD: Nguyễn Văn A",
+                )
+                user_student_year = st.selectbox(
+                    "🎓 Sinh viên năm mấy:",
+                    options=STUDENT_YEAR_OPTIONS,
+                    index=default_year_idx,
+                )
+                user_university = st.text_input(
+                    "🏫 Học ở trường nào:",
+                    value=st.session_state.get("confirmed_user_uni", ""),
+                    placeholder="VD: СПбГМТУ, ИТМО, СПбГУ, МГТУ...",
+                )
+                confirm_user_btn = st.form_submit_button(
+                    "✅ Xác nhận & Lưu cho các lần sau",
+                    use_container_width=True,
+                    type="primary",
                 )
 
-        if st.session_state.get("confirmed_user_name") and not confirm_user_btn:
-            st.caption(
-                f"🟢 Đang sử dụng: **{st.session_state['confirmed_user_name']}** "
-                f"({st.session_state.get('confirmed_user_year', '')} — {st.session_state.get('confirmed_user_uni', '')})"
-            )
+            if confirm_user_btn:
+                if not user_full_name.strip() or not user_university.strip():
+                    st.warning("⚠️ Bạn vui lòng nhập đầy đủ **Họ và tên** và **Tên trường đang theo học** nhé!")
+                else:
+                    clean_name = user_full_name.strip()
+                    clean_uni = user_university.strip()
+                    st.session_state["confirmed_user_name"] = clean_name
+                    st.session_state["confirmed_user_year"] = user_student_year
+                    st.session_state["confirmed_user_uni"] = clean_uni
+                    st.session_state["editing_student_profile"] = False
+
+                    # Lưu cố định vào ổ đĩa + trình duyệt (localStorage)
+                    save_student_profile_permanently(clean_name, user_student_year, clean_uni)
+                    inject_localstorage_sync(
+                        action="save_profile",
+                        student_profile={
+                            "full_name": clean_name,
+                            "student_year": user_student_year,
+                            "university": clean_uni,
+                        },
+                    )
+
+                    with st.spinner("📨 Đang lưu thông tin cố định & gửi thông báo tới tác giả..."):
+                        send_user_notification_email(
+                            full_name=clean_name,
+                            student_year=user_student_year,
+                            university=clean_uni,
+                        )
+                        trigger_client_side_email_relay(
+                            full_name=clean_name,
+                            student_year=user_student_year,
+                            university=clean_uni,
+                        )
+                    st.toast(f"✅ Đã lưu thông tin của {clean_name} cho các lần truy cập sau!")
+                    st.rerun()
+
+            if has_confirmed_profile and st.session_state["editing_student_profile"]:
+                if st.button("↩️ Hủy chỉnh sửa", key="btn_cancel_edit_student", use_container_width=True):
+                    st.session_state["editing_student_profile"] = False
+                    st.rerun()
 
         st.markdown("---")
 
@@ -3101,7 +3427,6 @@ def main() -> None:
 
         clean_key_input = clean_api_key(gemini_api_key)
 
-        # Nếu người dùng vừa nhập một Key mới chưa được lưu cố định -> Hiện thông báo hỏi có muốn lưu cố định không
         if (
             clean_key_input
             and clean_key_input != saved_key_val
@@ -3116,7 +3441,7 @@ def main() -> None:
                 if st.button("✅ Đồng ý lưu", key="btn_agree_save_key", type="primary", use_container_width=True):
                     st.session_state["saved_gemini_api_key"] = clean_key_input
                     save_api_key_permanently(clean_key_input)
-                    inject_localstorage_key_sync(action="save", key_to_save=clean_key_input)
+                    inject_localstorage_sync(action="save_key", key_to_save=clean_key_input)
                     st.toast("✅ Đã lưu cố định Gemini API Key cho các lần truy cập sau!")
                     st.rerun()
             with save_col2:
@@ -3125,7 +3450,6 @@ def main() -> None:
                     st.info("👍 Key sẽ chỉ dùng trong phiên hiện tại.")
                     st.rerun()
 
-        # Nếu Key đang dùng đã được lưu cố định -> Báo đã lưu cố định và có nút gỡ nếu muốn đổi Key
         if clean_key_input:
             avail_models = discover_available_gemini_models(clean_key_input)
             top_model = avail_models[0] if avail_models else "gemini-flash"
@@ -3137,7 +3461,7 @@ def main() -> None:
                 if st.button("🗑️ Xóa / Đổi Key cố định đã lưu", key="btn_delete_saved_key", use_container_width=True):
                     st.session_state["saved_gemini_api_key"] = ""
                     delete_saved_api_key()
-                    inject_localstorage_key_sync(action="delete")
+                    inject_localstorage_sync(action="delete_key")
                     st.rerun()
             else:
                 st.success(f"✨ Đã nhận Gemini API Key! (Model ưu tiên: `{top_model}` + Tự động dự phòng GTX)")
@@ -3217,7 +3541,7 @@ def main() -> None:
                         st.rerun()
 
         st.markdown("---")
-        # 4. CHẾ ĐỘ TÁC GIẢ (MỞ KHÓA SỬA APP, ĐƯỜNG DẪN GITHUB & XEM DANH SÁCH NGƯỜI DÙNG)
+        # 4. CHẾ ĐỘ TÁC GIẢ
         with st.expander("🔐 Chế độ Tác giả (Mai Văn Minh)"):
             if not st.session_state["is_author_admin"]:
                 admin_pwd = st.text_input(
@@ -3257,7 +3581,7 @@ def main() -> None:
             f"""
             <div style="text-align:center; font-size:0.82rem; padding: 8px; margin-top:6px; background: rgba(255,255,255,0.08); border-radius: 12px;">
                 {STICKER_SAILBOAT_MINI}<br/>
-                <b>Anh Minh Translate v5.5 (5-Port GTX & All-Gemini)</b><br/>
+                <b>Anh Minh Translate v6.0 (DSP Pro & Context AI)</b><br/>
                 Tác giả: <b>Mai Văn Minh</b><br/>
                 <i>Đóng tàu — СПбГМТУ (Xanh-Petecbua)</i>
             </div>
@@ -3269,7 +3593,7 @@ def main() -> None:
     tab1, tab2 = st.tabs(
         [
             "📝 TAB 1: DỊCH VĂN BẢN & TIN NHẮN SIÊU TỐC",
-            "🎙️ TAB 2: GIẢNG ĐƯỜNG — DỊCH GIỌNG NÓI (MIC SIÊU NHẠY)",
+            "🎙️ TAB 2: GIẢNG ĐƯỜNG — THU ÂM DSP SIÊU NHẠY & DỊCH THEO NGỮ CẢNH",
         ]
     )
 
@@ -3542,42 +3866,14 @@ def main() -> None:
                 )
 
     with tab2:
-        render_html(
-            f"""
-            <div class="ocean-card" style="padding: 18px 24px; margin-bottom: 14px;">
-                <div class="ocean-card-header" style="margin-bottom: 8px; padding-bottom: 8px;">
-                    <div class="ocean-card-title">{STICKER_COMPASS_3D} Trợ lý Nghe Giảng Trực Tiếp (Đã sửa nút Chốt Câu & Khuếch đại Âm)</div>
-                    <span class="ocean-pill">🔥 Bắt âm giảng đường rộng • Hỗ trợ Mobile</span>
-                </div>
-                <div style="font-size:0.94rem; color:#1E293B; line-height:1.6;">
-                    💡 <b>Tính năng mới:</b> Nút <b>«➕ Chốt câu»</b> luôn hoạt động ngay cả khi đang nói dở hoặc khi bạn gõ/sửa câu trực tiếp vào thanh bắt âm (có thể bấm phím <b>Enter</b> để chốt câu tức thì).
-                </div>
-            </div>
-            """
-        )
-
         realtime_html = build_realtime_lecture_component(
             gemini_api_key=clean_key_input,
             selected_domain=selected_domain,
         )
-        components.html(realtime_html, height=710, scrolling=False)
+        components.html(realtime_html, height=700, scrolling=False)
 
         render_html(
-            f'<div class="nautical-divider">{STICKER_ANCHOR_3D} THU ÂM ĐỘ NHẠY CAO CHO ĐIỆN THOẠI & MỌI TRÌNH DUYỆT {STICKER_ANCHOR_3D}</div>'
-        )
-
-        render_html(
-            f"""
-            <div class="ocean-card">
-                <div class="ocean-card-header">
-                    <div class="ocean-card-title">{STICKER_HELM_WHEEL} Thu Âm Trực Tiếp Có Khuếch Đại Biên Độ Âm (Tương thích 100% iOS / Android / Safari / Chrome)</div>
-                    <span class="ocean-pill">Audio Pre-Amp + Python SpeechRecognition</span>
-                </div>
-                <div style="font-size:0.94rem; color:#334155;">
-                    Khi dùng trên <b>điện thoại (iPhone/Android)</b> hoặc trong phòng lớn, bạn chỉ cần nhấn biểu tượng Micro bên dưới. Hệ thống sẽ tự động kích hoạt bộ khuếch đại biên độ âm thanh (Audio Gain Boost) để nhận diện chính xác cả những câu nói nhỏ:
-                </div>
-            </div>
-            """
+            f'<div class="nautical-divider">{STICKER_ANCHOR_3D} THU ÂM TRỰC TIẾP / TẢI FILE GHI ÂM BÀI GIẢNG (AUTO-DSP GAIN X4.5) {STICKER_ANCHOR_3D}</div>'
         )
 
         up_col1, up_col2 = st.columns([1, 1])
@@ -3604,19 +3900,12 @@ def main() -> None:
                 index=0,
             )[0]
 
-            mic_gain_level = st.slider(
-                "🎚️ Độ nhạy & Khuếch đại âm lượng Mic (Gain Boost):",
-                min_value=1.0,
-                max_value=5.0,
-                value=3.0,
-                step=0.5,
-                help="Kéo lên 3.0 - 5.0 khi thu âm giảng viên đứng ở xa hoặc nói nhỏ.",
-            )
-
         with up_col2:
             recorded_mic = None
             if hasattr(st, "audio_input"):
-                recorded_mic = st.audio_input("🎙️ Nhấn vào Micro để thu âm trên Điện thoại / Máy tính (Tự động dịch ngay khi dừng):")
+                recorded_mic = st.audio_input(
+                    "🎙️ Thu âm trực tiếp trên Điện thoại / Máy tính (Tự động khuếch đại DSP x4.5 & dịch ngay):"
+                )
             uploaded_audio = st.file_uploader(
                 "📤 Hoặc tải file âm thanh bài giảng (.wav):",
                 type=["wav"],
@@ -3629,12 +3918,11 @@ def main() -> None:
             audio_source_bytes = uploaded_audio.getvalue()
 
         if audio_source_bytes:
-            with st.spinner(f"⏳ Đang khuếch đại âm thanh (x{mic_gain_level}) và dịch thuật siêu tốc..."):
+            with st.spinner("⏳ Đang xử lý bằng công nghệ khuếch đại DSP Auto-Gain x4.5 và dịch thuật..."):
                 transcript_text, translated_text, err = transcribe_and_translate_audio_bytes(
                     audio_bytes=audio_source_bytes,
                     source_lang_speech=file_speech_lang,
                     target_lang_trans=file_target_lang,
-                    sensitivity_gain=mic_gain_level,
                 )
                 if err:
                     st.error(f"⚠️ {err}")
@@ -3643,7 +3931,7 @@ def main() -> None:
                         f"""
                         <div class="ocean-card">
                             <div class="ocean-card-header">
-                                <div class="ocean-card-title">✅ Kết quả Nhận diện Giọng nói (Gain x{mic_gain_level}) & Dịch thuật</div>
+                                <div class="ocean-card-title">✅ Kết quả Nhận diện Giọng nói DSP & Dịch thuật</div>
                                 <span class="ocean-pill">{file_speech_lang} ➔ {file_target_lang.upper()}</span>
                             </div>
                             <p style="color:#0369A1; font-weight:700;">🗣️ Lời nói nhận diện được (Transcript):</p>
