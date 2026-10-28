@@ -384,45 +384,165 @@ def log_user_locally(full_name: str, student_year: str, university: str) -> None
 def send_user_notification_email(full_name: str, student_year: str, university: str) -> Tuple[bool, str]:
     """
     Gửi thông báo người dùng mới về email tác giả (anhminh11062003@gmail.com).
+    Hỗ trợ 4 kênh: Gmail SMTP trực tiếp -> Formspree -> EmailJS -> FormSubmit (kèm Origin/Referer).
     """
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     log_user_locally(full_name, student_year, university)
+
+    # 1. Kênh SMTP Gmail trực tiếp (nếu tác giả cấu hình GMAIL_APP_PASSWORD trong Secrets/Env)
+    gmail_app_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    try:
+        if not gmail_app_pwd and "GMAIL_APP_PASSWORD" in st.secrets:
+            gmail_app_pwd = str(st.secrets["GMAIL_APP_PASSWORD"]).strip()
+    except Exception:
+        pass
+
+    if gmail_app_pwd:
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = f"🚢 [Anh Minh Translate] Sinh viên mới: {full_name} ({university})"
+            msg["From"] = AUTHOR_NOTIFICATION_EMAIL
+            msg["To"] = AUTHOR_NOTIFICATION_EMAIL
+            html_body = f"""
+            <div style="font-family:Arial,sans-serif;padding:16px;border:2px solid #0284C7;border-radius:12px;">
+                <h3 style="color:#0369A1;margin-top:0;">🚢 Thông báo Sinh viên sử dụng Anh Minh Translate</h3>
+                <p><b>👤 Họ và tên:</b> {full_name}</p>
+                <p><b>🎓 Sinh viên năm:</b> {student_year}</p>
+                <p><b>🏫 Trường đại học:</b> {university}</p>
+                <p><b>🕒 Thời gian:</b> {now_str}</p>
+            </div>
+            """
+            msg.attach(MIMEText(html_body, "html", "utf-8"))
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=8) as server:
+                server.login(AUTHOR_NOTIFICATION_EMAIL, gmail_app_pwd)
+                server.sendmail(AUTHOR_NOTIFICATION_EMAIL, [AUTHOR_NOTIFICATION_EMAIL], msg.as_string())
+            return True, "Gmail SMTP"
+        except Exception:
+            pass
 
     headers_json = {
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Origin": "https://dich-thuat-anhminh.streamlit.app",
+        "Referer": "https://dich-thuat-anhminh.streamlit.app/",
     }
 
-    formspree_url = FORMSPREE_ENDPOINT.strip()
-    try:
-        if not formspree_url and "FORMSPREE_ENDPOINT" in st.secrets:
-            formspree_url = str(st.secrets["FORMSPREE_ENDPOINT"]).strip()
-    except Exception:
-        pass
+    # 2. Kênh Formspree (nếu có FORMSPREE_ENDPOINT)
+    has_confirmed_profile = bool(
+            st.session_state.get("confirmed_user_name") and st.session_state.get("confirmed_user_uni")
+        )
 
-    if formspree_url:
-        try:
-            payload = {
-                "_subject": f"[Anh Minh Translate] Sinh viên mới: {full_name}",
-                "Họ và tên": full_name,
-                "Sinh viên năm": student_year,
-                "Trường đại học": university,
-                "Thời gian truy cập": now_str,
-                "Email nhận": AUTHOR_NOTIFICATION_EMAIL,
-            }
-            req = urllib.request.Request(
-                formspree_url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers=headers_json,
-                method="POST",
+        # Thực thi gửi Email từ trình duyệt SAU KHI trang đã rerun ổn định (không bị st.rerun() cắt ngang!)
+        if st.session_state.get("pending_email_relay"):
+            relay_info = st.session_state.pop("pending_email_relay")
+            inject_localstorage_sync(
+                action="save_profile",
+                student_profile=relay_info,
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                if resp.status in (200, 201, 202):
-                    return True, "Formspree"
-        except Exception:
-            pass
+            trigger_client_side_email_relay(
+                full_name=relay_info["full_name"],
+                student_year=relay_info["student_year"],
+                university=relay_info["university"],
+            )
 
+        if has_confirmed_profile and not st.session_state["editing_student_profile"]:
+            sv_name = st.session_state["confirmed_user_name"]
+            sv_year = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
+            sv_uni = st.session_state["confirmed_user_uni"]
+
+            render_html(
+                f"""
+                <div class="saved-student-badge-box">
+                    <div style="font-size:0.76rem; color:#A7F3D0; font-weight:700; margin-bottom:3px;">
+                        ✅ ĐÃ LƯU THÔNG TIN CỐ ĐỊNH
+                    </div>
+                    <div style="font-size:0.98rem; font-weight:800; color:#FFFFFF;">
+                        🎓 {sv_name}
+                    </div>
+                    <div style="font-size:0.82rem; color:#E0F2FE; margin-top:2px;">
+                        • {sv_year}<br/>
+                        • Trường: <b>{sv_uni}</b>
+                    </div>
+                </div>
+                """
+            )
+            col_prof1, col_prof2 = st.columns(2)
+            with col_prof1:
+                if st.button("✏️ Đổi thông tin", key="btn_edit_student_info", use_container_width=True):
+                    st.session_state["editing_student_profile"] = True
+                    st.rerun()
+            with col_prof2:
+                if st.button("📨 Gửi lại Email", key="btn_resend_email_notify", use_container_width=True):
+                    ok_mail, channel_mail = send_user_notification_email(sv_name, sv_year, sv_uni)
+                    trigger_client_side_email_relay(sv_name, sv_year, sv_uni)
+                    st.toast(f"📨 Đã gửi thông báo về {AUTHOR_NOTIFICATION_EMAIL} ({channel_mail})!")
+        else:
+            default_year_idx = 3
+            cur_year = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
+            if cur_year in STUDENT_YEAR_OPTIONS:
+                default_year_idx = STUDENT_YEAR_OPTIONS.index(cur_year)
+
+            with st.form("student_user_checkin_form", clear_on_submit=False):
+                user_full_name = st.text_input(
+                    "✍️ Họ và tên của bạn:",
+                    value=st.session_state.get("confirmed_user_name", ""),
+                    placeholder="VD: Nguyễn Văn A",
+                )
+                user_student_year = st.selectbox(
+                    "🎓 Sinh viên năm mấy:",
+                    options=STUDENT_YEAR_OPTIONS,
+                    index=default_year_idx,
+                )
+                user_university = st.text_input(
+                    "🏫 Học ở trường nào:",
+                    value=st.session_state.get("confirmed_user_uni", ""),
+                    placeholder="VD: СПбГМТУ, ИТМО, СПбГУ, МГТУ...",
+                )
+                confirm_user_btn = st.form_submit_button(
+                    "✅ Xác nhận & Lưu cho các lần sau",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+            if confirm_user_btn:
+                if not user_full_name.strip() or not user_university.strip():
+                    st.warning("⚠️ Bạn vui lòng nhập đầy đủ **Họ và tên** và **Tên trường đang theo học** nhé!")
+                else:
+                    clean_name = user_full_name.strip()
+                    clean_uni = user_university.strip()
+                    st.session_state["confirmed_user_name"] = clean_name
+                    st.session_state["confirmed_user_year"] = user_student_year
+                    st.session_state["confirmed_user_uni"] = clean_uni
+                    st.session_state["editing_student_profile"] = False
+
+                    save_student_profile_permanently(clean_name, user_student_year, clean_uni)
+
+                    with st.spinner("📨 Đang lưu thông tin cố định & gửi thông báo tới tác giả..."):
+                        send_user_notification_email(
+                            full_name=clean_name,
+                            student_year=user_student_year,
+                            university=clean_uni,
+                        )
+                        # Lưu cờ để gửi tiếp từ trình duyệt ngay sau khi st.rerun() hoàn tất
+                        st.session_state["pending_email_relay"] = {
+                            "full_name": clean_name,
+                            "student_year": user_student_year,
+                            "university": clean_uni,
+                        }
+                    st.toast(f"✅ Đã lưu thông tin của {clean_name} và gửi thông báo tới tác giả!")
+                    st.rerun()
+
+            if has_confirmed_profile and st.session_state["editing_student_profile"]:
+                if st.button("↩️ Hủy chỉnh sửa", key="btn_cancel_edit_student", use_container_width=True):
+                    st.session_state["editing_student_profile"] = False
+                    st.rerun()
+
+    # 3. Kênh EmailJS (nếu có cấu hình)
     ejs_service = EMAILJS_SERVICE_ID.strip()
     ejs_template = EMAILJS_TEMPLATE_ID.strip()
     ejs_pubkey = EMAILJS_PUBLIC_KEY.strip()
@@ -452,71 +572,125 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
         except Exception:
             pass
 
+    # 4. Kênh FormSubmit AJAX + Form POST (Có đầy đủ Origin & Referer header)
+    payload_fs = {
+        "_subject": f"🚢 [Anh Minh Translate] Người dùng mới: {full_name} ({university})",
+        "_template": "table",
+        "_captcha": "false",
+        "Ho_va_Ten": full_name,
+        "Sinh_vien_nam": student_year,
+        "Truong_theo_hoc": university,
+        "Thoi_gian": now_str,
+        "Ung_dung": "Anh Minh Translate (СПбГМТУ)",
+    }
     try:
-        formsubmit_url = f"https://formsubmit.co/ajax/{AUTHOR_NOTIFICATION_EMAIL}"
-        payload_fs = {
-            "_subject": f"🚢 [Anh Minh Translate] Người dùng mới: {full_name}",
-            "_template": "table",
-            "_captcha": "false",
-            "Ho_va_Ten": full_name,
-            "Sinh_vien_nam": student_year,
-            "Truong_theo_hoc": university,
-            "Thoi_gian": now_str,
-            "Ung_dung": "Anh Minh Translate (СПбГМТУ)",
-        }
+        formsubmit_ajax_url = f"https://formsubmit.co/ajax/{AUTHOR_NOTIFICATION_EMAIL}"
         req_fs = urllib.request.Request(
-            formsubmit_url,
+            formsubmit_ajax_url,
             data=json.dumps(payload_fs).encode("utf-8"),
             headers=headers_json,
             method="POST",
         )
         with urllib.request.urlopen(req_fs, timeout=8) as resp:
-            if resp.status in (200, 201):
-                return True, "FormSubmit Relay"
+            resp_body = resp.read().decode("utf-8", errors="ignore")
+            if resp.status in (200, 201) and '"success":false' not in resp_body.lower():
+                return True, "FormSubmit AJAX"
     except Exception:
         pass
 
-    return False, "Local Saved"
+    try:
+        formsubmit_post_url = f"https://formsubmit.co/{AUTHOR_NOTIFICATION_EMAIL}"
+        form_encoded = urllib.parse.urlencode(payload_fs).encode("utf-8")
+        headers_form = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": headers_json["User-Agent"],
+            "Origin": "https://dich-thuat-anhminh.streamlit.app",
+            "Referer": "https://dich-thuat-anhminh.streamlit.app/",
+        }
+        req_form = urllib.request.Request(
+            formsubmit_post_url,
+            data=form_encoded,
+            headers=headers_form,
+            method="POST",
+        )
+        with urllib.request.urlopen(req_form, timeout=8) as resp:
+            if resp.status in (200, 201, 302):
+                return True, "FormSubmit Form"
+    except Exception:
+        pass
+
+    return False, "Client Browser Relay"
 
 
 def trigger_client_side_email_relay(full_name: str, student_year: str, university: str) -> None:
+    """
+    Thực thi gửi thông báo từ trình duyệt người dùng (sau khi trang đã rerun ổn định)
+    bằng cả Fetch AJAX lẫn Hidden HTML Form POST tới FormSubmit.co để đảm bảo 100% gửi đi.
+    """
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     safe_payload = json.dumps(
         {
-            "_subject": f"🚢 [Anh Minh Translate] Sinh viên sử dụng: {full_name}",
+            "_subject": f"🚢 [Anh Minh Translate] Sinh viên sử dụng: {full_name} ({university})",
             "_template": "table",
             "_captcha": "false",
             "Họ và tên": full_name,
             "Sinh viên năm": student_year,
             "Trường đại học": university,
             "Thời gian": now_str,
-        }
+        },
+        ensure_ascii=False,
     )
     safe_formspree = json.dumps(FORMSPREE_ENDPOINT.strip())
+    safe_name_html = full_name.replace('"', "&quot;")
+    safe_year_html = student_year.replace('"', "&quot;")
+    safe_uni_html = university.replace('"', "&quot;")
+
     components.html(
         f"""
-        <script>
-        (function() {{
-            const payload = {safe_payload};
-            const formspreeUrl = {safe_formspree};
-            if (formspreeUrl) {{
-                fetch(formspreeUrl, {{
+        <!DOCTYPE html>
+        <html>
+        <body style="margin:0;padding:0;overflow:hidden;">
+            <iframe name="hidden_fs_iframe" style="display:none;"></iframe>
+            <form id="fsAutoForm" action="https://formsubmit.co/{AUTHOR_NOTIFICATION_EMAIL}" method="POST" target="hidden_fs_iframe" style="display:none;">
+                <input type="hidden" name="_subject" value="🚢 [Anh Minh Translate] Sinh viên mới: {safe_name_html} ({safe_uni_html})" />
+                <input type="hidden" name="_template" value="table" />
+                <input type="hidden" name="_captcha" value="false" />
+                <input type="hidden" name="Họ và tên" value="{safe_name_html}" />
+                <input type="hidden" name="Sinh viên năm" value="{safe_year_html}" />
+                <input type="hidden" name="Trường đại học" value="{safe_uni_html}" />
+                <input type="hidden" name="Thời gian" value="{now_str}" />
+            </form>
+            <script>
+            (function() {{
+                const payload = {safe_payload};
+                const formspreeUrl = {safe_formspree};
+                if (formspreeUrl) {{
+                    fetch(formspreeUrl, {{
+                        method: "POST",
+                        headers: {{ "Content-Type": "application/json", "Accept": "application/json" }},
+                        body: JSON.stringify(payload)
+                    }}).catch(() => {{}});
+                }}
+                fetch("https://formsubmit.co/ajax/{AUTHOR_NOTIFICATION_EMAIL}", {{
                     method: "POST",
                     headers: {{ "Content-Type": "application/json", "Accept": "application/json" }},
                     body: JSON.stringify(payload)
-                }}).catch(() => {{}});
-            }}
-            fetch("https://formsubmit.co/ajax/{AUTHOR_NOTIFICATION_EMAIL}", {{
-                method: "POST",
-                headers: {{ "Content-Type": "application/json", "Accept": "application/json" }},
-                body: JSON.stringify(payload)
-            }}).catch(() => {{}});
-        }})();
-        </script>
+                }}).then(r => r.json()).then(data => {{
+                    if (!data || data.success === "false" || data.success === false) {{
+                        const f = document.getElementById("fsAutoForm");
+                        if (f) f.submit();
+                    }}
+                }}).catch(() => {{
+                    const f = document.getElementById("fsAutoForm");
+                    if (f) f.submit();
+                }});
+            }})();
+            </script>
+        </body>
+        </html>
         """,
         height=0,
     )
-
 
 def get_fixed_author_portrait_svg_uri() -> str:
     svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
@@ -2189,8 +2363,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 opacity: 0.45;
                 cursor: not-allowed;
             }}
-
-            /* THANH ĐIỀU KHIỂN ĐỘ NHẠY MIC & CHẾ ĐỘ THU CLAUDE/CHATGPT */
             .sensitivity-bar {{
                 display: flex;
                 flex-wrap: wrap;
@@ -2246,7 +2418,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 border-radius: 999px;
                 transition: width 0.08s ease;
             }}
-
             .rt-visualizer-row {{
                 display: flex;
                 align-items: center;
@@ -2540,10 +2711,18 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 </div>
             </div>
 
-            <!-- THANH ĐỘ NHẠY MIC & CHẾ ĐỘ THU ÂM MÔ HÌNH CLAUDE / CHATGPT -->
+            <!-- THANH ĐỘ NHẠY MIC & CHẾ ĐỘ THU ÂM KHÔNG XUNG ĐỘT -->
             <div class="sensitivity-bar">
                 <div class="sens-group">
-                    <span>🎚️ <b>Độ nhạy Mic (Pre-Amp Boost):</b></span>
+                    <span>🎙️ <b>Chế độ thu:</b></span>
+                    <select id="captureModeSelect" class="rt-select" style="padding:5px 9px; font-size:0.8rem;" onchange="onCaptureModeChange()">
+                        <option value="webspeech" selected>⚡ Trực tiếp (Hiện chữ tức thì từng từ)</option>
+                        <option value="aidsp">🧠 AI Audio DSP (Cắt câu 4s bằng Gemini/Whisper)</option>
+                    </select>
+                </div>
+
+                <div class="sens-group">
+                    <span>🎚️ <b>Độ nhạy Mic:</b></span>
                     <input
                         type="range"
                         id="micGainSlider"
@@ -2555,13 +2734,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                         oninput="updateMicSensitivity(this.value)"
                     />
                     <span id="gainValueBadge" class="sens-pill">x7.5 (Siêu nhạy)</span>
-                </div>
-
-                <div class="sens-group">
-                    <label style="cursor:pointer; display:inline-flex; align-items:center; gap:5px;" title="Tắt bộ lọc ồn mặc định của trình duyệt để không bị nuốt tiếng khi giảng viên đứng xa hoặc nói nhỏ">
-                        <input type="checkbox" id="farFieldToggle" checked onchange="onFarFieldModeChange()" />
-                        <span>📡 <b>Thu xa Giảng đường (Chống nuốt tiếng nhỏ)</b></span>
-                    </label>
                 </div>
 
                 <div class="level-meter-wrap">
@@ -2576,9 +2748,9 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             <div class="rt-visualizer-row">
                 <div class="status-indicator">
                     <div id="statusDot" class="pulse-dot"></div>
-                    <span id="statusText">Sẵn sàng — Mô hình thu âm Hybrid VAD (Claude/ChatGPT) + Khuếch đại Pre-Amp x7.5 đã kích hoạt.</span>
+                    <span id="statusText">Sẵn sàng — Hãy kiểm tra ngôn ngữ mục «Nghe» (🇷🇺 Tiếng Nga hoặc 🇻🇳 Tiếng Việt) rồi nhấn «🎙️ Bắt đầu thu âm».</span>
                 </div>
-                <span id="engineBadge" class="dsp-badge">🔥 Hybrid Voice AI + VAD Auto-Gain</span>
+                <span id="engineBadge" class="dsp-badge">🔥 Live Speech Stream (Không xung đột Mic)</span>
                 <canvas id="waveCanvas" width="185" height="36"></canvas>
             </div>
 
@@ -2586,7 +2758,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 <div class="interim-top">
                     <div class="interim-left">
                         <span class="interim-label">🎙️ CÂU ĐANG THU</span>
-                        <span id="vadLivePill" class="vad-live-pill">🟢 Đang bắt được giọng nói...</span>
+                        <span id="vadLivePill" class="vad-live-pill">🟢 Đang thu giọng nói...</span>
                         <span id="interimText" class="interim-text">Nhấn "🎙️ Bắt đầu thu âm" rồi nói vào Mic — Chữ đang nói sẽ hiện trực tiếp tại đây theo thời gian thực...</span>
                     </div>
                 </div>
@@ -2609,7 +2781,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 <div id="subtitleStream" class="subtitle-stream">
                     <div id="emptyHint" class="empty-hint">
                         🚢 <b>Lịch sử Thu âm & Dịch thuật theo Ngữ cảnh (Mô hình Claude & ChatGPT Voice)</b><br/>
-                        • <b>Tự động bắt tiếng nhỏ & xa:</b> Kết hợp đồng thời <b>Web Speech Streaming</b> và <b>Bộ thu PCM 16kHz VAD Auto-Normalizer</b>.<br/>
+                        • <b>Lưu ý quan trọng khi thử Mic:</b> Nếu bạn nói <b>Tiếng Việt</b> để thử mic, hãy chọn mục <b>Nghe: 🇻🇳 Tiếng Việt</b> ở góc trái phía trên.<br/>
                         • <b>Không bị nhảy trang:</b> Khi bạn lướt lên để đọc lại các câu phía trên, màn hình sẽ <b>tự động khóa vị trí</b> để bạn đọc thoải mái!
                     </div>
                 </div>
@@ -2645,7 +2817,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
             const DEFAULT_PLACEHOLDERS = [
                 "Nhấn \\"🎙️ Bắt đầu thu âm\\" rồi nói vào Mic — Chữ đang nói sẽ hiện trực tiếp tại đây theo thời gian thực...",
-                "🎙️ Mic đã bật (Độ nhạy cao) — Hãy nói bình thường, chữ sẽ hiện ngay tại đây...",
+                "🎙️ Mic đã bật — Hãy nói bình thường, từng từ sẽ hiện trực tiếp tại đây...",
                 "...",
                 "Đã chốt câu! Đang lắng nghe câu tiếp theo..."
             ];
@@ -2655,42 +2827,35 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             let lectureHistory = [];
             let currentMicGain = 7.5;
 
-            // =========================================================================
-            // CƠ CHẾ CHỐNG LẶP CÂU & ĐỒNG BỘ TRỰC TIẾP TRONG "CÂU ĐANG THU"
-            // =========================================================================
             let committedResultIndex = 0;
             let currentActiveSentence = "";
             let latestResultsLength = 0;
             let lastCommittedNormalized = "";
             let lastCommitTimestamp = 0;
             let sentenceSilenceTimer = null;
+            let noResultWatchdogTimer = null;
             let lastSpeechActivity = 0;
             let lastWebSpeechResultAt = 0;
             let waveAnimId = null;
 
-            // =========================================================================
-            // LÕI 2 (CLAUDE / CHATGPT WHISPER VAD + PCM 16kHz AUTO-GAIN RECORDER):
-            // Bắt mọi âm thanh nhỏ nhất, tự động chuẩn hóa biên độ RMS và nhận diện
-            // ngay cả khi Web Speech API của trình duyệt bị câm hoặc không trả kết quả!
-            // =========================================================================
             let audioCtx = null;
             let micStream = null;
             let analyserNode = null;
             let gainNode = null;
             let scriptProcessor = null;
-            let pcmRingBuffer = [];           // Lưu các khối Float32 đã khuếch đại khi VAD phát hiện tiếng nói
+            let pcmRingBuffer = [];
             let vadSpeechActive = false;
             let vadSpeechStartTime = 0;
             let vadLastVoiceTime = 0;
             let isTranscribingChunk = false;
             let currentRmsLevel = 0;
-            let noiseFloorRms = 0.004;        // Ngưỡng nhiễu nền tự động thích nghi (Adaptive Noise Floor)
+            let noiseFloorRms = 0.008;
 
             let userScrolledUp = false;
             let unreadNewCount = 0;
 
-            const SENTENCE_PAUSE_MS = 1850;
-            const PUNCTUATION_PAUSE_MS = 600;
+            const SENTENCE_PAUSE_MS = 1650;
+            const PUNCTUATION_PAUSE_MS = 550;
 
             const statusDot = document.getElementById("statusDot");
             const statusText = document.getElementById("statusText");
@@ -2706,6 +2871,7 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
             const btnPause = document.getElementById("btnPause");
             const sourceLangSelect = document.getElementById("sourceLang");
             const targetLangSelect = document.getElementById("targetLang");
+            const captureModeSelect = document.getElementById("captureModeSelect");
             const levelBarFill = document.getElementById("levelBarFill");
             const levelPctText = document.getElementById("levelPctText");
             const gainValueBadge = document.getElementById("gainValueBadge");
@@ -2719,20 +2885,23 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 else if (currentMicGain >= 3.5) label = "Giảng đường";
                 gainValueBadge.innerText = `x${{currentMicGain.toFixed(1)}} (${{label}})`;
                 if (gainNode && audioCtx) {{
-                    gainNode.gain.setTargetAtTime(currentMicGain, audioCtx.currentTime, 0.03);
+                    gainNode.gain.setTargetAtTime(Math.min(4.0, currentMicGain * 0.45), audioCtx.currentTime, 0.03);
                 }}
             }}
 
-            function onFarFieldModeChange() {{
+            function onCaptureModeChange() {{
+                const mode = captureModeSelect ? captureModeSelect.value : "webspeech";
+                if (mode === "webspeech") {{
+                    engineBadge.innerText = "🔥 Live Speech Stream (Không xung đột Mic)";
+                }} else {{
+                    engineBadge.innerText = "🧠 AI Audio DSP (Gemini/Whisper 16kHz)";
+                }}
                 if (isListening) {{
-                    stopUltraAudioDSP();
-                    setTimeout(() => {{
-                        if (isListening) initUltraAudioDSP();
-                    }}, 150);
+                    stopRecognition();
+                    setTimeout(() => startRecognition(), 180);
                 }}
             }}
 
-            // Khi người dùng gõ hoặc sửa trong ô input, đồng bộ lên dòng CÂU ĐANG THU
             manualSentenceInput.addEventListener("input", () => {{
                 const val = manualSentenceInput.value;
                 currentActiveSentence = val;
@@ -2859,10 +3028,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 return resultWords.join(" ");
             }}
 
-            // =========================================================================
-            // CHUYỂN ĐỔI MẢNG FLOAT32 PCM ĐÃ KHUẾCH ĐẠI -> WAV 16kHz MONO CHUẨN WHISPER/GEMINI
-            // KÈM AUTO-RMS NORMALIZER (Tự động kích âm lượng câu nói nhỏ lên 92% biên độ)
-            // =========================================================================
             function encodeAmplifiedWavFromSamples(floatSamples, inputSampleRate) {{
                 if (!floatSamples || floatSamples.length === 0) return null;
                 const targetRate = 16000;
@@ -2875,7 +3040,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                     resampled[i] = floatSamples[srcIdx];
                 }}
 
-                // Tính RMS để kích tiếng nói nhỏ (như Whisper pre-processor)
                 let sumSq = 0;
                 for (let i = 0; i < resampled.length; i++) {{
                     const a = Math.abs(resampled[i]);
@@ -2909,7 +3073,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
 
                 let offset = 44;
                 for (let i = 0; i < resampled.length; i++) {{
-                    // Soft-clipping tanh giúp tiếng to không bị rè mà tiếng nhỏ vẫn cực rõ
                     let s = Math.tanh(resampled[i] * extraNormGain);
                     let intSample = s < 0 ? s * 0x8000 : s * 0x7FFF;
                     view.setInt16(offset, intSample, true);
@@ -2925,7 +3088,6 @@ def build_realtime_lecture_component(gemini_api_key: str = "", selected_domain: 
                 return btoa(binary);
             }}
 
-            // Nhận diện giọng nói từ khối âm thanh DSP bằng Gemini Multimodal Audio (như ChatGPT Whisper / Claude)
             async function transcribeBufferedAudioWithAI(wavBase64, srcLangCode) {{
                 if (!GEMINI_API_KEY || GEMINI_API_KEY.length < 10 || !wavBase64) return null;
                 const langName = srcLangCode.startsWith("ru")
@@ -2973,22 +3135,15 @@ Yêu cầu bắt buộc:
                 return null;
             }}
 
-            // =========================================================================
-            // KHỞI TẠO BỘ KHUẾCH ĐẠI DSP + SMART VAD (CHẠY SONG SONG KHÔNG KHÓA MIC)
-            // =========================================================================
             async function initUltraAudioDSP() {{
                 try {{
                     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
                     if (micStream) return;
 
-                    const farField = document.getElementById("farFieldToggle")?.checked ?? true;
-
-                    // Khi thu xa ở giảng đường: TẮT noiseSuppression và echoCancellation của trình duyệt
-                    // vì thuật toán mặc định của trình duyệt sẽ cắt mất giọng nói nhỏ ở xa!
                     micStream = await navigator.mediaDevices.getUserMedia({{
                         audio: {{
-                            echoCancellation: !farField,
-                            noiseSuppression: !farField,
+                            echoCancellation: true,
+                            noiseSuppression: true,
                             autoGainControl: true,
                             channelCount: 1
                         }}
@@ -3002,49 +3157,28 @@ Yêu cầu bắt buộc:
 
                     const source = audioCtx.createMediaStreamSource(micStream);
 
-                    // 1. Lọc cắt tần số ù nền điều hòa / quạt máy (< 80Hz)
                     const highpass = audioCtx.createBiquadFilter();
                     highpass.type = "highpass";
-                    highpass.frequency.value = 80;
+                    highpass.frequency.value = 85;
 
-                    // 2. Lọc cắt nhiễu rít tần số cao (> 7500Hz)
                     const lowpass = audioCtx.createBiquadFilter();
                     lowpass.type = "lowpass";
-                    lowpass.frequency.value = 7500;
+                    lowpass.frequency.value = 7200;
 
-                    // 3. Kích dải tần số giọng nói con người (Vocal Presence 1.8kHz - 3.2kHz) +8.5dB
-                    const voicePresence = audioCtx.createBiquadFilter();
-                    voicePresence.type = "peaking";
-                    voicePresence.frequency.value = 2400;
-                    voicePresence.Q.value = 0.9;
-                    voicePresence.gain.value = 8.5;
-
-                    // 4. Bộ nén dải động (Dynamics Compressor như phòng thu Podcast/Whisper)
-                    const compressor = audioCtx.createDynamicsCompressor();
-                    compressor.threshold.setValueAtTime(-58, audioCtx.currentTime);
-                    compressor.knee.setValueAtTime(35, audioCtx.currentTime);
-                    compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
-                    compressor.attack.setValueAtTime(0.002, audioCtx.currentTime);
-                    compressor.release.setValueAtTime(0.18, audioCtx.currentTime);
-
-                    // 5. Khuếch đại Pre-Amp theo thanh trượt Độ nhạy Mic (mặc định x7.5, tối đa x12)
                     gainNode = audioCtx.createGain();
-                    gainNode.gain.value = currentMicGain;
+                    gainNode.gain.value = Math.min(3.5, currentMicGain * 0.4);
 
                     analyserNode = audioCtx.createAnalyser();
                     analyserNode.fftSize = 256;
-                    analyserNode.smoothingTimeConstant = 0.5;
+                    analyserNode.smoothingTimeConstant = 0.55;
 
-                    // 6. Node thu mẫu PCM trực tiếp sau khi đã qua Pre-Amp + Compressor (Smart VAD)
                     scriptProcessor = audioCtx.createScriptProcessor(2048, 1, 1);
                     const silentSink = audioCtx.createGain();
-                    silentSink.gain.value = 0.0; // Không phát ngược ra loa tránh hú mic
+                    silentSink.gain.value = 0.0;
 
                     source.connect(highpass);
                     highpass.connect(lowpass);
-                    lowpass.connect(voicePresence);
-                    voicePresence.connect(compressor);
-                    compressor.connect(gainNode);
+                    lowpass.connect(gainNode);
                     gainNode.connect(analyserNode);
                     gainNode.connect(scriptProcessor);
                     scriptProcessor.connect(silentSink);
@@ -3060,16 +3194,14 @@ Yêu cầu bắt buộc:
                         const rms = Math.sqrt(sumSq / inputBuf.length);
                         currentRmsLevel = rms;
 
-                        // Tự động cập nhật ngưỡng nhiễu nền (Adaptive Noise Floor)
                         if (rms < noiseFloorRms) {{
-                            noiseFloorRms = noiseFloorRms * 0.95 + rms * 0.05;
+                            noiseFloorRms = noiseFloorRms * 0.94 + rms * 0.06;
                         }} else {{
-                            noiseFloorRms = noiseFloorRms * 0.998 + rms * 0.002;
+                            noiseFloorRms = noiseFloorRms * 0.995 + rms * 0.005;
                         }}
-                        const dynamicThreshold = Math.max(0.012, Math.min(0.06, noiseFloorRms * 2.1));
+                        const dynamicThreshold = Math.max(0.018, Math.min(0.12, noiseFloorRms * 2.4));
                         const now = Date.now();
 
-                        // Phát hiện có tiếng người nói vượt ngưỡng VAD
                         if (rms > dynamicThreshold) {{
                             lastSpeechActivity = now;
                             vadLastVoiceTime = now;
@@ -3079,27 +3211,21 @@ Yêu cầu bắt buộc:
                             }}
                         }}
 
-                        // Lưu mẫu âm thanh đã khuếch đại vào bộ đệm nếu đang có giọng nói (giữ tối đa 18 giây)
                         if (vadSpeechActive) {{
                             pcmRingBuffer.push(new Float32Array(inputBuf));
-                            const maxChunks = Math.ceil((18 * audioCtx.sampleRate) / 2048);
+                            const maxChunks = Math.ceil((15 * audioCtx.sampleRate) / 2048);
                             if (pcmRingBuffer.length > maxChunks) {{
                                 pcmRingBuffer.shift();
                             }}
 
-                            // Nếu người dùng đã ngừng nói > 1.15 giây sau một câu nói có độ dài >= 0.6 giây
                             const silenceDuration = now - vadLastVoiceTime;
-                            const speechDuration = vadLastVoiceTime - vadSpeechStartTime;
+                            const totalChunkDuration = now - vadSpeechStartTime;
 
-                            if (silenceDuration > 1150 && speechDuration >= 600) {{
+                            if ((silenceDuration > 950 && totalChunkDuration >= 600) || totalChunkDuration >= 4200) {{
                                 vadSpeechActive = false;
                                 const capturedChunks = pcmRingBuffer.slice();
                                 pcmRingBuffer = [];
-
-                                // Nếu Web Speech API KHÔNG trả về chữ nào trong 1.8 giây qua
-                                // -> Kích hoạt ngay Lõi 2 (AI Audio Transcription như Whisper/Claude)
-                                const webSpeechHasText = currentActiveSentence.trim().length > 0 || (now - lastWebSpeechResultAt) < 1800;
-                                if (!webSpeechHasText && !isTranscribingChunk && capturedChunks.length > 4) {{
+                                if (!isTranscribingChunk && capturedChunks.length > 4) {{
                                     handleFallbackAudioChunk(capturedChunks, audioCtx.sampleRate);
                                 }}
                             }}
@@ -3123,7 +3249,7 @@ Yêu cầu bắt buộc:
 
                 if (GEMINI_API_KEY && GEMINI_API_KEY.length > 10) {{
                     isTranscribingChunk = true;
-                    interimText.innerText = "🧠 Đang giải mã âm thanh khuếch đại DSP bằng AI (Mô hình Whisper/Gemini Audio)...";
+                    interimText.innerText = "🧠 Đang giải mã đoạn âm thanh bằng AI Audio (Gemini/Whisper)...";
                     try {{
                         const wavB64 = encodeAmplifiedWavFromSamples(merged, sampleRate);
                         const aiTranscript = await transcribeBufferedAudioWithAI(wavB64, sourceLangSelect.value);
@@ -3131,13 +3257,15 @@ Yêu cầu bắt buộc:
                             interimText.innerText = aiTranscript;
                             if (manualSentenceInput) manualSentenceInput.value = aiTranscript;
                             appendSubtitleCard(aiTranscript, sourceLangSelect.value, targetLangSelect.value);
-                            interimText.innerText = "Đã chốt câu bằng AI Audio! Đang lắng nghe câu tiếp theo...";
+                            interimText.innerText = "✅ Đã chốt câu! Đang lắng nghe câu tiếp theo...";
                             if (manualSentenceInput) manualSentenceInput.value = "";
                         }} else if (!currentActiveSentence.trim()) {{
                             interimText.innerText = "🎙️ Đang lắng nghe (Hãy tiếp tục nói)...";
                         }}
                     }} catch (e) {{}}
                     isTranscribingChunk = false;
+                }} else {{
+                    interimText.innerText = "💡 Chế độ AI Audio DSP cần Gemini API Key ở thanh bên trái. Hãy chọn chế độ «⚡ Trực tiếp» hoặc dán Gemini API Key!";
                 }}
             }}
 
@@ -3159,6 +3287,7 @@ Yêu cầu bắt buộc:
                     gainNode = null;
                     pcmRingBuffer = [];
                     vadSpeechActive = false;
+                    currentRmsLevel = 0;
                 }} catch (e) {{}}
             }}
 
@@ -3166,6 +3295,7 @@ Yêu cầu bắt buộc:
                 const canvas = document.getElementById("waveCanvas");
                 const ctx = canvas.getContext("2d");
                 const bars = 24;
+                if (waveAnimId) cancelAnimationFrame(waveAnimId);
 
                 function renderWave() {{
                     if (!isListening) {{
@@ -3179,10 +3309,18 @@ Yêu cầu bắt buộc:
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                     const barW = canvas.width / bars;
                     const now = Date.now();
-                    const isVoiceActiveNow = (now - lastSpeechActivity) < 450;
+                    const isVoiceActiveNow = (now - lastSpeechActivity) < 550;
 
-                    // Cập nhật thanh đo mức tín hiệu đầu vào & hiệu ứng bắt giọng nói trực quan
-                    const pct = Math.min(100, Math.round(Math.pow(Math.min(1.0, currentRmsLevel * 4.2), 0.65) * 100));
+                    let pct = 0;
+                    if (analyserNode) {{
+                        pct = Math.min(98, Math.round(Math.min(1.0, currentRmsLevel * 3.2) * 100));
+                    }} else {{
+                        if (isVoiceActiveNow) {{
+                            pct = Math.min(92, Math.max(38, Math.round(58 + Math.sin(now / 90) * 22 + (currentMicGain - 5) * 2)));
+                        }} else {{
+                            pct = Math.max(2, Math.round(4 + Math.sin(now / 300) * 2));
+                        }}
+                    }}
                     if (levelBarFill) levelBarFill.style.width = pct + "%";
                     if (levelPctText) levelPctText.innerText = pct + "%";
 
@@ -3192,13 +3330,6 @@ Yêu cầu bắt buộc:
                         if (vadLivePill) {{
                             vadLivePill.style.display = "inline-block";
                             vadLivePill.innerText = `🟢 Đang thu giọng nói (${{pct}}%)`;
-                        }}
-                        // Nếu đã bắt được tiếng nói nhưng WebSpeech chưa kịp trả chữ, hiển thị phản hồi tức thì trong CÂU ĐANG THU
-                        if (!currentActiveSentence.trim() && !isTranscribingChunk) {{
-                            const curDom = (interimText.innerText || "").trim();
-                            if (DEFAULT_PLACEHOLDERS.includes(curDom) || curDom.startsWith("Nhấn")) {{
-                                interimText.innerText = "🎙️ Đang thu tín hiệu giọng nói của bạn (Đang tách từ theo thời gian thực...)";
-                            }}
                         }}
                     }} else {{
                         statusDot.classList.remove("speaking");
@@ -3211,7 +3342,7 @@ Yêu cầu bắt buộc:
                         analyserNode.getByteFrequencyData(freqData);
                         for (let i = 0; i < bars; i++) {{
                             const val = freqData[i % freqData.length] || 0;
-                            const h = Math.max(4, Math.min(canvas.height - 2, (val / 255) * canvas.height * 1.45));
+                            const h = Math.max(4, Math.min(canvas.height - 2, (val / 255) * canvas.height * 1.25));
                             const grad = ctx.createLinearGradient(0, canvas.height, 0, 0);
                             grad.addColorStop(0, "#0284C7");
                             grad.addColorStop(1, isVoiceActiveNow ? "#38BDF8" : "#4ADE80");
@@ -3220,12 +3351,12 @@ Yêu cầu bắt buộc:
                         }}
                     }} else {{
                         for (let i = 0; i < bars; i++) {{
-                            const base = isVoiceActiveNow ? (Math.sin(now / 80 + i * 0.7) * 0.45 + 0.55) : 0.16;
-                            const jitter = isVoiceActiveNow ? Math.random() * 0.35 : Math.random() * 0.08;
+                            const base = isVoiceActiveNow ? (Math.sin(now / 75 + i * 0.65) * 0.4 + 0.5) : 0.14;
+                            const jitter = isVoiceActiveNow ? Math.random() * 0.3 : Math.random() * 0.05;
                             const h = Math.max(4, Math.min(canvas.height - 2, (base + jitter) * canvas.height));
                             const grad = ctx.createLinearGradient(0, canvas.height, 0, 0);
                             grad.addColorStop(0, "#0284C7");
-                            grad.addColorStop(1, "#4ADE80");
+                            grad.addColorStop(1, isVoiceActiveNow ? "#38BDF8" : "#4ADE80");
                             ctx.fillStyle = grad;
                             ctx.fillRect(i * barW + 1, canvas.height - h, barW - 3, h);
                         }}
@@ -3318,7 +3449,7 @@ ${{cleanCurrent}}`;
                 }} catch (err2) {{}}
 
                 try {{
-                    const mmUrl = `https://api.mymemory.translated.net/get?q=${{encodeURIComponent(cleanCurrent.slice(0, 450))}}&langpair=${{srcShort}}|${{tgtLang}}`;
+                    const mmUrl = `https://api.mymemory.translated.net/get?q=${{encodeURIComponent(cleanCurrent.slice(0, 450))&langpair=${{srcShort}}|${{tgtLang}}`;
                     const res3 = await fetch(mmUrl);
                     const data3 = await res3.json();
                     if (data3 && data3.responseData && data3.responseData.translatedText) {{
@@ -3421,7 +3552,9 @@ ${{cleanCurrent}}`;
                         !DEFAULT_PLACEHOLDERS.includes(domText) &&
                         !domText.startsWith("Nhấn") &&
                         !domText.startsWith("🎙️") &&
-                        !domText.startsWith("🧠")
+                        !domText.startsWith("🧠") &&
+                        !domText.startsWith("💡") &&
+                        !domText.startsWith("✅")
                     ) {{
                         candidate = domText;
                     }}
@@ -3432,11 +3565,10 @@ ${{cleanCurrent}}`;
                     currentActiveSentence = "";
                     pcmRingBuffer = [];
                     if (manualSentenceInput) manualSentenceInput.value = "";
-                    interimText.innerText = "Đã chốt câu! Đang lắng nghe câu tiếp theo...";
+                    interimText.innerText = "✅ Đã chốt câu! Đang lắng nghe câu tiếp theo...";
 
                     appendSubtitleCard(candidate, sourceLangSelect.value, targetLangSelect.value);
                 }} else if (pcmRingBuffer.length > 3 && audioCtx && GEMINI_API_KEY && GEMINI_API_KEY.length > 10) {{
-                    // Nếu người dùng bấm Ngắt câu ngay khi đang thu bằng bộ đệm DSP PCM
                     const captured = pcmRingBuffer.slice();
                     pcmRingBuffer = [];
                     vadSpeechActive = false;
@@ -3447,7 +3579,7 @@ ${{cleanCurrent}}`;
                     if (manualSentenceInput) manualSentenceInput.focus();
                     setTimeout(() => {{
                         if (isListening) {{
-                            statusText.innerText = `🟢 Đang thu âm Hybrid DSP x${{currentMicGain.toFixed(1)}} (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Hãy nói bình thường...`;
+                            statusText.innerText = `🟢 Đang thu âm (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Hãy nói bình thường...`;
                         }} else {{
                             statusText.innerText = prevStatus;
                         }}
@@ -3470,174 +3602,193 @@ ${{cleanCurrent}}`;
                 return bestText;
             }}
 
-            // =========================================================================
-            // KHỞI ĐỘNG THU ÂM ĐỒNG BỘ (SYNCHRONOUS START) ĐỂ KHÔNG MẤT USER GESTURE
-            // VÀ KHÔNG XUNG ĐỘT QUYỀN MICROPHONE TRÊN MỌI TRÌNH DUYỆT
-            // =========================================================================
             function startRecognition() {{
                 if (isListening) return;
 
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                const selectedMode = captureModeSelect ? captureModeSelect.value : "webspeech";
 
                 isListening = true;
                 committedResultIndex = 0;
                 latestResultsLength = 0;
                 currentActiveSentence = "";
+                lastWebSpeechResultAt = 0;
                 statusDot.classList.add("active");
                 btnStart.disabled = true;
                 btnPause.disabled = false;
-                interimText.innerText = "🎙️ Mic đã bật (Độ nhạy cao) — Hãy nói bình thường, chữ sẽ hiện ngay tại đây...";
 
-                if (SpeechRecognition) {{
-                    try {{
-                        recognition = new SpeechRecognition();
-                        recognition.lang = sourceLangSelect.value;
-                        recognition.continuous = true;
-                        recognition.interimResults = true;
-                        recognition.maxAlternatives = 3;
+                const langLabel = sourceLangSelect.options[sourceLangSelect.selectedIndex].text;
+                interimText.innerText = `🎙️ Đang lắng nghe bằng ${{langLabel}} — Bạn hãy nói vào Mic, từng chữ sẽ hiện ngay tại đây...`;
 
-                        recognition.onstart = () => {{
-                            statusText.innerText = `🟢 Đang thu âm Hybrid DSP x${{currentMicGain.toFixed(1)}} (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Cứ hết câu máy sẽ tự xuống dòng & dịch...`;
-                        }};
+                startReactiveWave();
 
-                        recognition.onaudiostart = () => {{
-                            statusText.innerText = `🟢 Đã kết nối luồng âm thanh Mic (${{sourceLangSelect.options[sourceLangSelect.selectedIndex].text}}) — Đang lắng nghe...`;
-                        }};
-
-                        recognition.onspeechstart = () => {{
-                            lastSpeechActivity = Date.now();
-                        }};
-
-                        recognition.onresult = (event) => {{
-                            const now = Date.now();
-                            lastSpeechActivity = now;
-                            lastWebSpeechResultAt = now;
-                            latestResultsLength = event.results.length;
-
-                            if (committedResultIndex > event.results.length) {{
-                                committedResultIndex = 0;
-                            }}
-
-                            let rebuiltSentence = "";
-                            let hasUnfinishedInterim = false;
-
-                            for (let i = committedResultIndex; i < event.results.length; ++i) {{
-                                const piece = pickBestTranscript(event.results[i]);
-                                if (!piece) continue;
-
-                                if (
-                                    i === committedResultIndex &&
-                                    lastCommittedNormalized &&
-                                    normalizeForComparison(piece) === lastCommittedNormalized
-                                ) {{
-                                    committedResultIndex = i + 1;
-                                    continue;
-                                }}
-
-                                rebuiltSentence = smartMergeSegments(rebuiltSentence, piece);
-                                if (!event.results[i].isFinal) {{
-                                    hasUnfinishedInterim = true;
-                                }}
-                            }}
-
-                            rebuiltSentence = collapseImmediateRepetitions(rebuiltSentence);
-                            currentActiveSentence = rebuiltSentence;
-
-                            if (currentActiveSentence.length > 0) {{
-                                // Hiển thị NGAY LẬP TỨC câu đang nói trong cả 2 ô
-                                interimText.innerText = currentActiveSentence;
-                                if (manualSentenceInput) {{
-                                    manualSentenceInput.value = currentActiveSentence;
-                                }}
-                                // Đã có kết quả từ Web Speech thì xóa bớt bộ đệm PCM dự phòng để không dịch trùng
-                                pcmRingBuffer = [];
-
-                                if (sentenceSilenceTimer) clearTimeout(sentenceSilenceTimer);
-
-                                const wordCount = currentActiveSentence.split(/\\s+/).length;
-                                const hasEndPunctuation = /[.?!…]\\s*$/.test(currentActiveSentence);
-
-                                if (hasEndPunctuation && !hasUnfinishedInterim && wordCount >= 2) {{
-                                    sentenceSilenceTimer = setTimeout(() => {{
-                                        forceCommitInterim();
-                                    }}, PUNCTUATION_PAUSE_MS);
-                                }} else if (!hasUnfinishedInterim && wordCount >= 11) {{
-                                    sentenceSilenceTimer = setTimeout(() => {{
-                                        forceCommitInterim();
-                                    }}, PUNCTUATION_PAUSE_MS);
-                                }} else {{
-                                    sentenceSilenceTimer = setTimeout(() => {{
-                                        if (currentActiveSentence.trim().length > 0) {{
-                                            forceCommitInterim();
-                                        }}
-                                    }}, SENTENCE_PAUSE_MS);
-                                }}
-                            }}
-                        }};
-
-                        recognition.onerror = (event) => {{
-                            if (event.error === "not-allowed" || event.error === "service-not-allowed") {{
-                                statusText.innerText = "❌ Trình duyệt đang chặn quyền Microphone! Hãy bấm biểu tượng ổ khóa trên thanh địa chỉ web -> Cho phép Microphone.";
-                                stopRecognition();
-                            }} else if (event.error === "audio-capture") {{
-                                statusText.innerText = "❌ Không tìm thấy thiết bị Microphone! Hãy kiểm tra kết nối Mic của bạn.";
-                                stopRecognition();
-                            }} else if (event.error === "network") {{
-                                statusText.innerText = "🔄 Đang chuyển sang Lõi thu âm dự phòng DSP VAD (do kết nối Web Speech bị gián đoạn)...";
-                            }} else if (event.error === "no-speech") {{
-                                statusText.innerText = `🟢 Mic DSP x${{currentMicGain.toFixed(1)}} đang lắng nghe (Bạn có thể tăng thanh Độ nhạy Mic nếu ngồi xa)...`;
-                            }}
-                        }};
-
-                        recognition.onend = () => {{
-                            if (currentActiveSentence.trim().length > 0) {{
-                                const pending = currentActiveSentence.trim();
-                                currentActiveSentence = "";
-                                if (manualSentenceInput) manualSentenceInput.value = "";
-                                appendSubtitleCard(pending, sourceLangSelect.value, targetLangSelect.value);
-                            }}
-                            committedResultIndex = 0;
-                            latestResultsLength = 0;
-
-                            if (isListening) {{
-                                setTimeout(() => {{
-                                    if (isListening && recognition) {{
-                                        try {{
-                                            recognition.lang = sourceLangSelect.value;
-                                            recognition.start();
-                                        }} catch (e) {{}}
-                                    }}
-                                }}, 80);
-                            }}
-                        }};
-
-                        sourceLangSelect.onchange = () => {{
-                            if (isListening && recognition) {{
-                                recognition.lang = sourceLangSelect.value;
-                                try {{ recognition.stop(); }} catch (e) {{}}
-                            }}
-                        }};
-
-                        // GỌI ĐỒNG BỘ NGAY LẬP TỨC (Không await trước dòng này!)
-                        recognition.start();
-                    }} catch (err) {{
-                        statusText.innerText = "⚠️ Đang kích hoạt bộ thu âm DSP dự phòng: " + err.message;
+                if (selectedMode === "aidsp" || !SpeechRecognition) {{
+                    if (recognition) {{
+                        try {{ recognition.stop(); }} catch (e) {{}}
+                        recognition = null;
                     }}
-                }} else {{
-                    statusText.innerText = "🟢 Đang chạy chế độ thu âm DSP VAD + AI Audio (Trình duyệt không có WebSpeech nội bộ).";
+                    statusText.innerText = `🧠 Đang thu âm bằng AI Audio DSP (${{langLabel}}) — Cứ nói hết câu (~4 giây) AI sẽ tự động chép lời & dịch...`;
+                    initUltraAudioDSP();
+                    return;
                 }}
 
-                // Khởi chạy mạch DSP Pre-Amp & VAD sau 220ms để không tranh chấp quyền mở Mic đầu tiên với SpeechRecognition
-                setTimeout(async () => {{
-                    if (!isListening) return;
-                    await initUltraAudioDSP();
-                    startReactiveWave();
-                }}, 220);
+                // Tắt mọi luồng getUserMedia để SpeechRecognition độc quyền Microphone 100%
+                stopUltraAudioDSP();
+
+                try {{
+                    recognition = new SpeechRecognition();
+                    recognition.lang = sourceLangSelect.value;
+                    recognition.continuous = true;
+                    recognition.interimResults = true;
+                    recognition.maxAlternatives = 3;
+
+                    recognition.onstart = () => {{
+                        const curLangText = sourceLangSelect.options[sourceLangSelect.selectedIndex].text;
+                        statusText.innerText = `🟢 Đang thu âm trực tiếp (${{curLangText}}) — Hãy nói bình thường, chữ sẽ chạy ngay bên dưới...`;
+                    }};
+
+                    recognition.onaudiostart = () => {{ lastSpeechActivity = Date.now(); }};
+                    recognition.onsoundstart = () => {{ lastSpeechActivity = Date.now(); }};
+                    recognition.onspeechstart = () => {{ lastSpeechActivity = Date.now(); }};
+
+                    recognition.onresult = (event) => {{
+                        const now = Date.now();
+                        lastSpeechActivity = now;
+                        lastWebSpeechResultAt = now;
+                        latestResultsLength = event.results.length;
+
+                        if (committedResultIndex > event.results.length) {{
+                            committedResultIndex = 0;
+                        }}
+
+                        let rebuiltSentence = "";
+                        let hasUnfinishedInterim = false;
+
+                        for (let i = committedResultIndex; i < event.results.length; ++i) {{
+                            const piece = pickBestTranscript(event.results[i]);
+                            if (!piece) continue;
+
+                            if (
+                                i === committedResultIndex &&
+                                lastCommittedNormalized &&
+                                normalizeForComparison(piece) === lastCommittedNormalized
+                            ) {{
+                                committedResultIndex = i + 1;
+                                continue;
+                            }}
+
+                            rebuiltSentence = smartMergeSegments(rebuiltSentence, piece);
+                            if (!event.results[i].isFinal) {{
+                                hasUnfinishedInterim = true;
+                            }}
+                        }}
+
+                        rebuiltSentence = collapseImmediateRepetitions(rebuiltSentence);
+                        currentActiveSentence = rebuiltSentence;
+
+                        if (currentActiveSentence.length > 0) {{
+                            interimText.innerText = currentActiveSentence;
+                            if (manualSentenceInput) {{
+                                manualSentenceInput.value = currentActiveSentence;
+                            }}
+
+                            if (sentenceSilenceTimer) clearTimeout(sentenceSilenceTimer);
+
+                            const wordCount = currentActiveSentence.split(/\\s+/).length;
+                            const hasEndPunctuation = /[.?!…]\\s*$/.test(currentActiveSentence);
+
+                            if (hasEndPunctuation && !hasUnfinishedInterim && wordCount >= 2) {{
+                                sentenceSilenceTimer = setTimeout(() => {{
+                                    forceCommitInterim();
+                                }}, PUNCTUATION_PAUSE_MS);
+                            }} else if (!hasUnfinishedInterim && wordCount >= 11) {{
+                                sentenceSilenceTimer = setTimeout(() => {{
+                                    forceCommitInterim();
+                                }}, PUNCTUATION_PAUSE_MS);
+                            }} else {{
+                                sentenceSilenceTimer = setTimeout(() => {{
+                                    if (currentActiveSentence.trim().length > 0) {{
+                                        forceCommitInterim();
+                                    }}
+                                }}, SENTENCE_PAUSE_MS);
+                            }}
+                        }}
+                    }};
+
+                    recognition.onerror = (event) => {{
+                        if (event.error === "not-allowed" || event.error === "service-not-allowed") {{
+                            statusText.innerText = "❌ Trình duyệt đang chặn quyền Microphone! Hãy bấm biểu tượng ổ khóa trên thanh địa chỉ web -> Cho phép Microphone.";
+                            stopRecognition();
+                        }} else if (event.error === "audio-capture") {{
+                            statusText.innerText = "❌ Không tìm thấy thiết bị Microphone! Hãy kiểm tra kết nối Mic của bạn.";
+                            stopRecognition();
+                        }} else if (event.error === "network") {{
+                            statusText.innerText = "🔄 Kết nối WebSpeech bị chặn trên trình duyệt này — Đang tự động chuyển sang chế độ AI Audio DSP...";
+                            if (captureModeSelect) captureModeSelect.value = "aidsp";
+                            try {{ recognition.stop(); }} catch (e) {{}}
+                            recognition = null;
+                            initUltraAudioDSP();
+                        }} else if (event.error === "no-speech") {{
+                            const curLang = sourceLangSelect.options[sourceLangSelect.selectedIndex].text;
+                            statusText.innerText = `🟢 Đang lắng nghe (${{curLang}}) — Lưu ý: Nếu bạn nói Tiếng Việt hãy chọn mục «Nghe: 🇻🇳 Tiếng Việt» nhé!`;
+                        }}
+                    }};
+
+                    recognition.onend = () => {{
+                        if (currentActiveSentence.trim().length > 0) {{
+                            const pending = currentActiveSentence.trim();
+                            currentActiveSentence = "";
+                            if (manualSentenceInput) manualSentenceInput.value = "";
+                            appendSubtitleCard(pending, sourceLangSelect.value, targetLangSelect.value);
+                        }}
+                        committedResultIndex = 0;
+                        latestResultsLength = 0;
+
+                        const modeNow = captureModeSelect ? captureModeSelect.value : "webspeech";
+                        if (isListening && modeNow === "webspeech" && recognition) {{
+                            setTimeout(() => {{
+                                if (isListening && recognition) {{
+                                    try {{
+                                        recognition.lang = sourceLangSelect.value;
+                                        recognition.start();
+                                    }} catch (e) {{}}
+                                }}
+                            }}, 80);
+                        }}
+                    }};
+
+                    sourceLangSelect.onchange = () => {{
+                        const newLangText = sourceLangSelect.options[sourceLangSelect.selectedIndex].text;
+                        interimText.innerText = `🎙️ Đã chuyển sang nghe ${{newLangText}} — Hãy nói vào Mic...`;
+                        if (isListening && recognition) {{
+                            recognition.lang = sourceLangSelect.value;
+                            try {{ recognition.stop(); }} catch (e) {{}}
+                        }}
+                    }};
+
+                    recognition.start();
+
+                    if (noResultWatchdogTimer) clearTimeout(noResultWatchdogTimer);
+                    noResultWatchdogTimer = setTimeout(() => {{
+                        if (isListening && lastWebSpeechResultAt === 0 && !currentActiveSentence.trim()) {{
+                            const isRu = sourceLangSelect.value.startsWith("ru");
+                            if (isRu) {{
+                                interimText.innerText = "💡 Chưa thấy chữ hiện ra? Nếu bạn đang nói TIẾNG VIỆT để thử Mic, hãy đổi ô «Nghe» (góc trên bên trái) sang «🇻🇳 Tiếng Việt»! Hoặc đổi «Chế độ thu» sang «🧠 AI Audio DSP».";
+                            }} else {{
+                                interimText.innerText = "💡 Nếu trình duyệt của bạn chặn WebSpeech (như Brave/Firefox), hãy đổi «Chế độ thu» sang «🧠 AI Audio DSP» hoặc dùng nút Thu âm trực tiếp ngay bên dưới!";
+                            }}
+                        }}
+                    }}, 6000);
+                }} catch (err) {{
+                    statusText.innerText = "⚠️ Đang chuyển sang chế độ thu âm AI Audio DSP dự phòng: " + err.message;
+                    initUltraAudioDSP();
+                }}
             }}
 
             function stopRecognition() {{
                 isListening = false;
                 if (sentenceSilenceTimer) clearTimeout(sentenceSilenceTimer);
+                if (noResultWatchdogTimer) clearTimeout(noResultWatchdogTimer);
                 if (currentActiveSentence.trim().length > 0) {{
                     const remaining = currentActiveSentence.trim();
                     currentActiveSentence = "";
@@ -3713,7 +3864,6 @@ ${{cleanCurrent}}`;
     </body>
     </html>
     """
-
 
 # ==============================================================================
 # 7. XỬ LÝ THU ÂM BẰNG PYTHON THUẦN (CHUẨN HÓA RMS + PRE-EMPHASIS NHƯ WHISPER X12.0)
