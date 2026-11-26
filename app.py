@@ -492,6 +492,7 @@ def sync_current_account_to_db() -> None:
         },
         "api_key": clean_api_key(st.session_state.get("saved_gemini_api_key", "")),
         "theme_mode": st.session_state.get("theme_mode", "light"),
+        "is_author_admin": bool(st.session_state.get("is_author_admin", False)),
         "vocab_notebook": st.session_state.get("saved_vocab_notebook", [])[:500],
         "translation_history": st.session_state.get("translation_history", [])[:MAX_HISTORY_ITEMS],
     }
@@ -507,6 +508,12 @@ def apply_user_payload_to_session(username: str, payload: Dict[str, Any]) -> Non
     st.session_state["confirmed_user_uni"] = prof.get("university", "")
     st.session_state["saved_gemini_api_key"] = clean_api_key(payload.get("api_key", ""))
     st.session_state["theme_mode"] = payload.get("theme_mode", "light") if payload.get("theme_mode") in ("light", "dark") else "light"
+    if payload.get("is_author_admin"):
+        st.session_state["is_author_admin"] = True
+        try:
+            st.query_params["a"] = create_admin_token()
+        except Exception:
+            pass
     st.session_state["saved_vocab_notebook"] = payload.get("vocab_notebook") if isinstance(payload.get("vocab_notebook"), list) else []
     st.session_state["translation_history"] = payload.get("translation_history") if isinstance(payload.get("translation_history"), list) else []
     try:
@@ -515,28 +522,46 @@ def apply_user_payload_to_session(username: str, payload: Dict[str, Any]) -> Non
         pass
 
 
-def _get_device_remember_key() -> str:
-    """Tạo mã thiết bị riêng (dựa trên IP + User-Agent + Accept-Language) cho tính năng Ghi nhớ đăng nhập."""
+def create_admin_token() -> str:
+    """Tạo token tác giả đã ký HMAC (không chứa mật khẩu rõ)."""
+    return hmac.new(SESSION_SIGNING_SECRET.encode("utf-8"), b"author_admin_persistent_v1", hashlib.sha256).hexdigest()[:32]
+
+
+def verify_admin_token(tok: str) -> bool:
+    if not tok:
+        return False
+    return hmac.compare_digest(tok.strip(), create_admin_token())
+
+
+def _get_device_remember_keys() -> List[str]:
+    """
+    Trả về danh sách mã thiết bị (ưu tiên theo IP+UA, dự phòng theo UA+Lang để KHÔNG bị văng khi đổi Wi-Fi hoặc bật/tắt VPN).
+    """
+    keys: List[str] = []
     try:
         headers = st.context.headers if hasattr(st, "context") and hasattr(st.context, "headers") else {}
-        ua = str(headers.get("User-Agent", ""))
-        lang = str(headers.get("Accept-Language", ""))
+        ua = str(headers.get("User-Agent", "")).strip()
+        lang = str(headers.get("Accept-Language", "")).strip()
         xff = str(headers.get("X-Forwarded-For", headers.get("X-Real-Ip", "")))
         ip_part = xff.split(",")[0].strip() if xff else ""
-        if ua or ip_part:
-            h = hashlib.sha256(f"{ip_part}::{ua}::{lang}".encode("utf-8")).hexdigest()[:24]
-            return f"__dev_{h}"
+        if ua and ip_part:
+            h1 = hashlib.sha256(f"{ip_part}::{ua}::{lang}".encode("utf-8")).hexdigest()[:24]
+            keys.append(f"__dev_{h1}")
+        if ua:
+            h2 = hashlib.sha256(f"ua_only::{ua}::{lang}".encode("utf-8")).hexdigest()[:24]
+            keys.append(f"__dev_{h2}")
     except Exception:
         pass
-    return ""
+    return keys
 
 
 def save_remembered_login(username: str) -> None:
-    """Lưu ghi nhớ đăng nhập bền vững qua đóng tab / tắt trình duyệt (Cookie + localStorage + DB device link)."""
+    """Lưu ghi nhớ đăng nhập bền vững kể cả khi đổi IP/VPN hay đóng tab mở lại."""
     tok = create_session_token(username)
-    dev_key = _get_device_remember_key()
-    if dev_key:
-        db_save_user(dev_key, {"remembered_username": username, "token": tok})
+    for dk in _get_device_remember_keys():
+        existing = db_get_user(dk) or {}
+        existing.update({"remembered_username": username, "token": tok})
+        db_save_user(dk, existing)
     safe_tok = json.dumps(tok)
     components.html(
         f"""
@@ -555,10 +580,11 @@ def save_remembered_login(username: str) -> None:
 
 
 def clear_remembered_login() -> None:
-    """Xóa ghi nhớ đăng nhập trên thiết bị hiện tại (khi đăng xuất hoặc hủy lưu)."""
-    dev_key = _get_device_remember_key()
-    if dev_key:
-        db_save_user(dev_key, {"remembered_username": "", "token": ""})
+    for dk in _get_device_remember_keys():
+        existing = db_get_user(dk) or {}
+        existing["remembered_username"] = ""
+        existing["token"] = ""
+        db_save_user(dk, existing)
     components.html(
         """
         <script>
@@ -574,23 +600,91 @@ def clear_remembered_login() -> None:
     )
 
 
-def bootstrap_remembered_login_js() -> None:
-    """Đọc lại token từ localStorage nếu trình duyệt vừa mở lại từ link gốc sau khi đóng tab."""
+def save_remembered_admin() -> None:
+    """Lưu cố định quyền Tác giả sau lần mở khóa đầu tiên (gắn vào tài khoản + Cookie + localStorage + Device DB)."""
+    atok = create_admin_token()
+    try:
+        st.query_params["a"] = atok
+    except Exception:
+        pass
+    for dk in _get_device_remember_keys():
+        existing = db_get_user(dk) or {}
+        existing["admin_token"] = atok
+        db_save_user(dk, existing)
+    if st.session_state.get("auth_username"):
+        sync_current_account_to_db()
+    safe_atok = json.dumps(atok)
+    components.html(
+        f"""
+        <script>
+        try {{
+            const a = {safe_atok};
+            localStorage.setItem("am_admin_token", a);
+            const c = "am_atok=" + encodeURIComponent(a) + "; path=/; max-age=31536000; SameSite=Lax";
+            try {{ window.parent.document.cookie = c; }} catch (e) {{}}
+            document.cookie = c;
+        }} catch (e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def clear_remembered_admin() -> None:
+    try:
+        if "a" in st.query_params:
+            del st.query_params["a"]
+    except Exception:
+        pass
+    for dk in _get_device_remember_keys():
+        existing = db_get_user(dk) or {}
+        existing["admin_token"] = ""
+        db_save_user(dk, existing)
+    if st.session_state.get("auth_username"):
+        sync_current_account_to_db()
     components.html(
         """
         <script>
         try {
-            const t = localStorage.getItem("am_remember_token");
-            if (t && t.includes(".")) {
-                const url = new URL(window.parent.location.href);
-                const lastTry = parseInt(sessionStorage.getItem("am_rtok_sync_ts") || "0", 10);
-                if (url.searchParams.get("s") !== t && (Date.now() - lastTry > 4000)) {
-                    sessionStorage.setItem("am_rtok_sync_ts", String(Date.now()));
-                    url.searchParams.set("s", t);
-                    window.parent.location.replace(url.toString());
-                }
-            }
+            localStorage.removeItem("am_admin_token");
+            const c = "am_atok=; path=/; max-age=0; SameSite=Lax";
+            try { window.parent.document.cookie = c; } catch (e) {}
+            document.cookie = c;
         } catch (e) {}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def bootstrap_remembered_tokens_js(need_user: bool = True, need_admin: bool = True) -> None:
+    """Đọc lại token đăng nhập & token tác giả từ localStorage khi mở lại link gốc."""
+    components.html(
+        f"""
+        <script>
+        try {{
+            const url = new URL(window.parent.location.href);
+            let changed = false;
+            if ({'true' if need_user else 'false'}) {{
+                const t = localStorage.getItem("am_remember_token");
+                if (t && t.includes(".") && url.searchParams.get("s") !== t) {{
+                    url.searchParams.set("s", t);
+                    changed = true;
+                }}
+            }}
+            if ({'true' if need_admin else 'false'}) {{
+                const a = localStorage.getItem("am_admin_token");
+                if (a && a.length >= 16 && url.searchParams.get("a") !== a) {{
+                    url.searchParams.set("a", a);
+                    changed = true;
+                }}
+            }}
+            const lastTry = parseInt(sessionStorage.getItem("am_tok_sync_ts") || "0", 10);
+            if (changed && (Date.now() - lastTry > 3000)) {{
+                sessionStorage.setItem("am_tok_sync_ts", String(Date.now()));
+                window.parent.location.replace(url.toString());
+            }}
+        }} catch (e) {{}}
         </script>
         """,
         height=0,
@@ -2289,11 +2383,10 @@ def init_session_state() -> None:
             except Exception:
                 pass
 
-        # Lớp 3: Từ liên kết thiết bị trên DB (hoạt động ngay cả khi Brave Shields chặn cookie!)
+        # Lớp 3: Từ liên kết thiết bị trên DB (thử cả IP+UA và UA-only để không bị văng khi đổi Wi-Fi / VPN)
         if not restored:
-            dev_key = _get_device_remember_key()
-            if dev_key:
-                dev_rec = db_get_user(dev_key)
+            for dk in _get_device_remember_keys():
+                dev_rec = db_get_user(dk)
                 if isinstance(dev_rec, dict) and dev_rec.get("token"):
                     uname = verify_session_token(str(dev_rec["token"]))
                     if uname:
@@ -2302,11 +2395,51 @@ def init_session_state() -> None:
                             apply_user_payload_to_session(uname, user_payload)
                             st.session_state["is_login_remembered"] = True
                             restored = True
+                            break
 
-        # Lớp 4: Dự phòng đọc localStorage từ trình duyệt
-        if not restored and not st.session_state.get("rtok_js_checked"):
-            st.session_state["rtok_js_checked"] = True
-            bootstrap_remembered_login_js()
+    # KHÔI PHỤC QUYỀN TÁC GIẢ CỐ ĐỊNH (Query ?a= -> Cookie am_atok -> Device DB)
+    if not st.session_state["is_author_admin"]:
+        try:
+            if verify_admin_token(str(st.query_params.get("a", ""))):
+                st.session_state["is_author_admin"] = True
+        except Exception:
+            pass
+    if not st.session_state["is_author_admin"]:
+        try:
+            if hasattr(st, "context") and hasattr(st.context, "cookies"):
+                if verify_admin_token(urllib.parse.unquote(str(st.context.cookies.get("am_atok", "")))):
+                    st.session_state["is_author_admin"] = True
+        except Exception:
+            pass
+    if not st.session_state["is_author_admin"]:
+        for dk in _get_device_remember_keys():
+            dev_rec = db_get_user(dk)
+            if isinstance(dev_rec, dict) and verify_admin_token(str(dev_rec.get("admin_token", ""))):
+                st.session_state["is_author_admin"] = True
+                break
+
+    # Đảm bảo giữ nguyên token trên URL để F5 không bao giờ bị văng
+    if st.session_state.get("auth_username"):
+        try:
+            expected_s = create_session_token(st.session_state["auth_username"])
+            if st.query_params.get("s") != expected_s:
+                st.query_params["s"] = expected_s
+        except Exception:
+            pass
+    if st.session_state.get("is_author_admin"):
+        try:
+            expected_a = create_admin_token()
+            if st.query_params.get("a") != expected_a:
+                st.query_params["a"] = expected_a
+        except Exception:
+            pass
+
+    # Lớp 4: Nếu vẫn chưa có phiên hoặc chưa có quyền tác giả -> đọc localStorage trình duyệt 1 lần
+    need_u = not bool(st.session_state.get("auth_username"))
+    need_a = not bool(st.session_state.get("is_author_admin"))
+    if (need_u or need_a) and not st.session_state.get("rtok_js_checked"):
+        st.session_state["rtok_js_checked"] = True
+        bootstrap_remembered_tokens_js(need_user=need_u, need_admin=need_a)
 
 
 def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: bool = False) -> None:
@@ -2528,6 +2661,12 @@ def main() -> None:
         if st.session_state.get("pending_remember_clear"):
             st.session_state.pop("pending_remember_clear")
             clear_remembered_login()
+        if st.session_state.get("pending_admin_save"):
+            st.session_state.pop("pending_admin_save")
+            save_remembered_admin()
+        if st.session_state.get("pending_admin_clear"):
+            st.session_state.pop("pending_admin_clear")
+            clear_remembered_admin()
 
         if st.session_state["auth_username"]:
             uname = st.session_state["auth_username"]
@@ -2682,9 +2821,11 @@ def main() -> None:
         with st.expander("Dành cho tác giả"):
             if not st.session_state["is_author_admin"]:
                 pwd = st.text_input("Mật khẩu", type="password", key="author_pwd_in")
-                if st.button("Mở khóa", use_container_width=True):
+                if st.button("Mở khóa & Lưu cố định", use_container_width=True):
                     if verify_author_password(pwd):
                         st.session_state["is_author_admin"] = True
+                        st.session_state["pending_admin_save"] = True
+                        st.toast("Đã mở khóa và lưu cố định quyền Tác giả cho các lần sau!")
                         st.rerun()
                     else:
                         st.error("Mật khẩu không đúng.")
@@ -2729,8 +2870,9 @@ def main() -> None:
                             db_save_user(u_target, rec)
                             st.success(f"Đã đặt lại mật khẩu cho @{u_target}.")
 
-                if st.button("Khóa lại", use_container_width=True):
+                if st.button("Khóa lại (Hủy lưu quyền tác giả)", use_container_width=True):
                     st.session_state["is_author_admin"] = False
+                    st.session_state["pending_admin_clear"] = True
                     st.rerun()
 
     # HEADER + NÚT BẬT/TẮT NỀN SÁNG/TỐI
