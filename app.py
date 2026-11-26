@@ -64,11 +64,11 @@ MAX_MEM_CACHE_SIZE = 300
 MAX_AI_CACHE_SIZE = 150
 MAX_HISTORY_ITEMS = 30
 
-# Thứ tự model ưu tiên độ trễ thấp nhất trước (tránh gọi GET /models tốn thêm 1 round-trip)
-FAST_GEMINI_MODELS = [
+PREFERRED_GEMINI_MODELS = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
     "gemini-2.0-flash-lite",
     "gemini-2.0-flash",
-    "gemini-2.5-flash",
     "gemini-1.5-flash",
 ]
 
@@ -91,6 +91,7 @@ EMAILJS_TEMPLATE_ID = _get_secret_or_env("EMAILJS_TEMPLATE_ID", "")
 EMAILJS_PUBLIC_KEY = _get_secret_or_env("EMAILJS_PUBLIC_KEY", "")
 
 USER_LOGS_FILE = Path(".user_access_logs.json")
+CLIENT_STATE_FILE = Path(".client_private_vault.json")
 
 STUDENT_YEAR_OPTIONS = [
     "Dự bị tiếng Nga (Подфак)",
@@ -234,27 +235,88 @@ def render_copy_button(text_to_copy: str, label: str = "Sao chép", key_suffix: 
 
 
 # ==============================================================================
-# 2. LƯU TRỮ RIÊNG TƯ TRÊN TRÌNH DUYỆT (LOCALSTORAGE) & THÔNG BÁO EMAIL
+# 2. LƯU CỐ ĐỊNH KEY & HỒ SƠ SINH VIÊN BỀN VỮNG QUA MỌI LẦN F5 / RESET WEB
+#    (KẾT HỢP 3 LỚP: BROWSER COOKIE + LOCALSTORAGE + VAULT CÁCH LY THEO CLIENT ID)
 # ==============================================================================
-def consume_bootstrap_query_params() -> Tuple[str, Dict[str, str]]:
-    recovered_key = ""
-    recovered_profile: Dict[str, str] = {}
-    had_qp = False
+def _get_client_vault_id() -> str:
+    """
+    Tạo mã định danh riêng của từng người dùng dựa trên Cookie `am_uid` (nếu có)
+    hoặc hash từ IP + User-Agent + Accept-Language. Tuyệt đối KHÔNG dùng khóa 'default' chung.
+    """
     try:
-        qp_key = st.query_params.get("_am_k", "")
-        if qp_key:
-            recovered_key = clean_api_key(qp_key)
+        if hasattr(st, "context") and hasattr(st.context, "cookies"):
+            uid = str(st.context.cookies.get("am_uid", "")).strip()
+            if len(uid) >= 8:
+                return f"uid_{uid[:24]}"
+    except Exception:
+        pass
+
+    try:
+        headers = st.context.headers if hasattr(st, "context") and hasattr(st.context, "headers") else {}
+        ua = str(headers.get("User-Agent", ""))
+        lang = str(headers.get("Accept-Language", ""))
+        xff = str(headers.get("X-Forwarded-For", headers.get("X-Real-Ip", "")))
+        ip_part = xff.split(",")[0].strip() if xff else ""
+        if ua or ip_part:
+            raw = f"{ip_part}::{ua}::{lang}"
+            return "fp_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    except Exception:
+        pass
+    return ""
+
+
+def _read_vault_all() -> Dict[str, Any]:
+    if CLIENT_STATE_FILE.exists():
+        try:
+            data = json.loads(CLIENT_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _write_vault_entry(client_id: str, updates: Dict[str, Any]) -> None:
+    if not client_id:
+        return
+    data = _read_vault_all()
+    entry = data.get(client_id) if isinstance(data.get(client_id), dict) else {}
+    entry.update(updates)
+    entry["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    data[client_id] = entry
+    try:
+        CLIENT_STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def load_persisted_user_data() -> Tuple[str, Dict[str, str]]:
+    """
+    Đọc API Key và Hồ sơ sinh viên bền vững sau khi F5 / đóng mở lại trình duyệt:
+    Ưu tiên 1: Query params vừa đồng bộ từ localStorage (đọc xong xóa ngay khỏi URL)
+    Ưu tiên 2: Cookie HTTP của chính trình duyệt người dùng (st.context.cookies)
+    Ưu tiên 3: Vault cục bộ cách ly theo client_id riêng
+    """
+    api_key = ""
+    profile: Dict[str, str] = {}
+    had_qp = False
+
+    # 1. Đọc từ query params vừa bootstrap (nếu có) rồi xóa ngay khỏi URL
+    try:
+        qp_k = st.query_params.get("_am_k", "")
+        if qp_k:
+            api_key = clean_api_key(qp_k)
             del st.query_params["_am_k"]
             had_qp = True
 
-        qp_name = st.query_params.get("_am_n", "").strip()
-        qp_year = st.query_params.get("_am_y", "").strip()
-        qp_uni = st.query_params.get("_am_u", "").strip()
-        if qp_name and qp_uni:
-            recovered_profile = {
-                "full_name": qp_name,
-                "student_year": qp_year if qp_year in STUDENT_YEAR_OPTIONS else "Sinh viên Năm 4",
-                "university": qp_uni,
+        qp_n = st.query_params.get("_am_n", "").strip()
+        qp_y = st.query_params.get("_am_y", "").strip()
+        qp_u = st.query_params.get("_am_u", "").strip()
+        if qp_n and qp_u:
+            profile = {
+                "full_name": qp_n,
+                "student_year": qp_y if qp_y in STUDENT_YEAR_OPTIONS else "Sinh viên Năm 4",
+                "university": qp_u,
             }
         for k in ("_am_n", "_am_y", "_am_u", "saved_gkey", "sv_name", "sv_year", "sv_uni"):
             if k in st.query_params:
@@ -277,57 +339,147 @@ def consume_bootstrap_query_params() -> Tuple[str, Dict[str, str]]:
             """,
             height=0,
         )
-    return recovered_key, recovered_profile
+
+    # 2. Đọc trực tiếp từ Cookie trình duyệt (bền vững qua mọi lần F5, không cần reload)
+    try:
+        if hasattr(st, "context") and hasattr(st.context, "cookies"):
+            cookies = st.context.cookies
+            if not api_key and cookies.get("am_gkey"):
+                api_key = clean_api_key(urllib.parse.unquote(str(cookies.get("am_gkey"))))
+            if not profile and cookies.get("am_prof"):
+                raw_p = urllib.parse.unquote(str(cookies.get("am_prof")))
+                parsed_p = json.loads(raw_p)
+                if isinstance(parsed_p, dict) and parsed_p.get("full_name") and parsed_p.get("university"):
+                    profile = {
+                        "full_name": str(parsed_p["full_name"]).strip(),
+                        "student_year": str(parsed_p.get("student_year", "Sinh viên Năm 4")).strip(),
+                        "university": str(parsed_p["university"]).strip(),
+                    }
+    except Exception:
+        pass
+
+    # 3. Dự phòng từ Vault riêng theo client_id (không chia sẻ giữa các máy khác nhau)
+    cid = _get_client_vault_id()
+    if cid and (not api_key or not profile):
+        entry = _read_vault_all().get(cid)
+        if isinstance(entry, dict):
+            if not api_key and entry.get("api_key"):
+                api_key = clean_api_key(str(entry["api_key"]))
+            if not profile and isinstance(entry.get("profile"), dict):
+                p = entry["profile"]
+                if p.get("full_name") and p.get("university"):
+                    profile = {
+                        "full_name": str(p["full_name"]).strip(),
+                        "student_year": str(p.get("student_year", "Sinh viên Năm 4")).strip(),
+                        "university": str(p["university"]).strip(),
+                    }
+
+    return api_key, profile
 
 
-def inject_localstorage_sync(
-    action: str = "load_all",
-    key_to_save: str = "",
+def persist_browser_state(
+    action: str,
+    api_key: str = "",
     student_profile: Optional[Dict[str, str]] = None,
 ) -> None:
-    safe_key = json.dumps(clean_api_key(key_to_save))
-    safe_profile = json.dumps(student_profile or {}, ensure_ascii=False)
+    """
+    Ghi đồng thời vào Cookie (max-age 1 năm), localStorage và Vault riêng của client_id.
+    """
+    cid = _get_client_vault_id()
+    safe_key = json.dumps(clean_api_key(api_key))
+    safe_prof = json.dumps(student_profile or {}, ensure_ascii=False)
 
     if action == "save_key":
+        _write_vault_entry(cid, {"api_key": clean_api_key(api_key)})
         components.html(
-            f'<script>try{{localStorage.setItem("anhminh_saved_gemini_key",{safe_key});}}catch(e){{}}</script>',
+            f"""
+            <script>
+            try {{
+                const k = {safe_key};
+                localStorage.setItem("anhminh_saved_gemini_key", k);
+                const cookieStr = "am_gkey=" + encodeURIComponent(k) + "; path=/; max-age=31536000; SameSite=Lax";
+                try {{ window.parent.document.cookie = cookieStr; }} catch (e) {{}}
+                document.cookie = cookieStr;
+            }} catch (e) {{}}
+            </script>
+            """,
             height=0,
         )
     elif action == "delete_key":
-        components.html(
-            '<script>try{localStorage.removeItem("anhminh_saved_gemini_key");}catch(e){}</script>',
-            height=0,
-        )
-    elif action == "save_profile":
-        components.html(
-            f'<script>try{{localStorage.setItem("anhminh_saved_student_profile",JSON.stringify({safe_profile}));}}catch(e){{}}</script>',
-            height=0,
-        )
-    else:
+        _write_vault_entry(cid, {"api_key": ""})
         components.html(
             """
             <script>
             try {
-                if (!sessionStorage.getItem("anhminh_bootstrapped_v11")) {
-                    sessionStorage.setItem("anhminh_bootstrapped_v11", "1");
-                    const url = new URL(window.parent.location.href);
-                    let changed = false;
-                    const savedKey = localStorage.getItem("anhminh_saved_gemini_key");
-                    if (savedKey && savedKey.trim().length > 10) {
-                        url.searchParams.set("_am_k", savedKey.trim());
+                localStorage.removeItem("anhminh_saved_gemini_key");
+                const delCookie = "am_gkey=; path=/; max-age=0; SameSite=Lax";
+                try { window.parent.document.cookie = delCookie; } catch (e) {}
+                document.cookie = delCookie;
+            } catch (e) {}
+            </script>
+            """,
+            height=0,
+        )
+    elif action == "save_profile":
+        _write_vault_entry(cid, {"profile": student_profile or {}})
+        components.html(
+            f"""
+            <script>
+            try {{
+                const pStr = JSON.stringify({safe_prof});
+                localStorage.setItem("anhminh_saved_student_profile", pStr);
+                const cookieStr = "am_prof=" + encodeURIComponent(pStr) + "; path=/; max-age=31536000; SameSite=Lax";
+                try {{ window.parent.document.cookie = cookieStr; }} catch (e) {{}}
+                document.cookie = cookieStr;
+            }} catch (e) {{}}
+            </script>
+            """,
+            height=0,
+        )
+    elif action == "bootstrap_from_localstorage":
+        # Chạy mỗi khi server session còn trống (kể cả sau F5!) — KHÔNG bị chặn bởi sessionStorage cũ
+        components.html(
+            """
+            <script>
+            try {
+                // Đảm bảo luôn có cookie định danh am_uid riêng cho trình duyệt này
+                let hasUid = (document.cookie || "").includes("am_uid=");
+                if (!hasUid) {
+                    const randUid = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).replace(/-/g, "");
+                    const uidCookie = "am_uid=" + randUid + "; path=/; max-age=31536000; SameSite=Lax";
+                    try { window.parent.document.cookie = uidCookie; } catch (e) {}
+                    document.cookie = uidCookie;
+                }
+
+                const url = new URL(window.parent.location.href);
+                let changed = false;
+
+                const savedKey = localStorage.getItem("anhminh_saved_gemini_key");
+                if (savedKey && savedKey.trim().length > 10) {
+                    const ck = "am_gkey=" + encodeURIComponent(savedKey.trim()) + "; path=/; max-age=31536000; SameSite=Lax";
+                    try { window.parent.document.cookie = ck; } catch (e) {}
+                    url.searchParams.set("_am_k", savedKey.trim());
+                    changed = true;
+                }
+
+                const rawProf = localStorage.getItem("anhminh_saved_student_profile");
+                if (rawProf) {
+                    const prof = JSON.parse(rawProf);
+                    if (prof && prof.full_name && prof.university) {
+                        const cp = "am_prof=" + encodeURIComponent(rawProf) + "; path=/; max-age=31536000; SameSite=Lax";
+                        try { window.parent.document.cookie = cp; } catch (e) {}
+                        url.searchParams.set("_am_n", prof.full_name);
+                        url.searchParams.set("_am_y", prof.student_year || "Sinh viên Năm 4");
+                        url.searchParams.set("_am_u", prof.university);
                         changed = true;
                     }
-                    const rawProf = localStorage.getItem("anhminh_saved_student_profile");
-                    if (rawProf) {
-                        const prof = JSON.parse(rawProf);
-                        if (prof && prof.full_name && prof.university) {
-                            url.searchParams.set("_am_n", prof.full_name);
-                            url.searchParams.set("_am_y", prof.student_year || "Sinh viên Năm 4");
-                            url.searchParams.set("_am_u", prof.university);
-                            changed = true;
-                        }
-                    }
-                    if (changed) window.parent.location.replace(url.toString());
+                }
+
+                // Chống vòng lặp reload bằng mốc thời gian 4 giây
+                const lastSync = parseInt(sessionStorage.getItem("am_last_sync_ts") || "0", 10);
+                if (changed && (Date.now() - lastSync > 4000)) {
+                    sessionStorage.setItem("am_last_sync_ts", String(Date.now()));
+                    window.parent.location.replace(url.toString());
                 }
             } catch (e) {}
             </script>
@@ -534,14 +686,6 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
         {hide_admin_chrome}
 
         :root {{
-            --bg-page: #FAF9F6;
-            --bg-surface: #FFFFFF;
-            --bg-subtle: #F4F3EE;
-            --text-primary: #18181B;
-            --text-secondary: #52525B;
-            --text-muted: #71717A;
-            --border-light: #E5E4DF;
-            --border-strong: #D4D4D8;
             color-scheme: light !important;
         }}
 
@@ -768,11 +912,7 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             margin: 0;
             line-height: 1.2;
         }}
-        .minimal-sub {{
-            font-size: 0.88rem;
-            color: #52525B;
-            margin-top: 3px;
-        }}
+        .minimal-sub {{ font-size: 0.88rem; color: #52525B; margin-top: 3px; }}
         .author-chip {{
             display: flex;
             align-items: center;
@@ -783,36 +923,22 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             padding: 6px 14px 6px 6px;
         }}
         .author-chip-img {{
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 1px solid #D4D4D8;
-            flex-shrink: 0;
+            width: 40px; height: 40px; border-radius: 50%; object-fit: cover;
+            border: 1px solid #D4D4D8; flex-shrink: 0;
         }}
         .author-chip-name {{ font-size: 0.86rem; font-weight: 600; color: #18181B; line-height: 1.25; }}
         .author-chip-role {{ font-size: 0.76rem; color: #52525B; line-height: 1.25; }}
 
         .sidebar-author-box {{
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            background: #FFFFFF;
-            border: 1px solid #E5E4DF;
-            border-radius: 12px;
-            padding: 12px;
-            margin-bottom: 14px;
+            display: flex; align-items: center; gap: 12px;
+            background: #FFFFFF; border: 1px solid #E5E4DF; border-radius: 12px;
+            padding: 12px; margin-bottom: 14px;
         }}
         .sidebar-author-img {{
-            width: 52px;
-            height: 52px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 1px solid #D4D4D8;
-            flex-shrink: 0;
+            width: 52px; height: 52px; border-radius: 50%; object-fit: cover;
+            border: 1px solid #D4D4D8; flex-shrink: 0;
         }}
 
-        /* THẺ NỘI DUNG */
         .clean-card {{
             background-color: #FFFFFF;
             border: 1px solid #E5E4DF;
@@ -822,85 +948,46 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             margin-bottom: 14px;
         }}
         .clean-label {{
-            font-size: 0.82rem;
-            font-weight: 600;
-            color: #52525B;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 6px;
+            font-size: 0.82rem; font-weight: 600; color: #52525B; margin-bottom: 8px;
+            display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;
         }}
         .clean-result-text {{
-            font-size: 1.07rem;
-            line-height: 1.72;
-            color: #18181B;
-            font-weight: 500;
-            white-space: pre-wrap;
-            word-break: break-word;
+            font-size: 1.07rem; line-height: 1.72; color: #18181B; font-weight: 500;
+            white-space: pre-wrap; word-break: break-word;
         }}
-        .example-row {{
-            padding: 11px 0;
-            border-bottom: 1px solid #E5E4DF;
-        }}
+        .example-row {{ padding: 11px 0; border-bottom: 1px solid #E5E4DF; }}
         .example-row:last-child {{ border-bottom: none; padding-bottom: 2px; }}
         .example-ru {{ font-size: 1.0rem; font-weight: 600; color: #18181B; line-height: 1.5; }}
         .example-vi {{ font-size: 0.91rem; color: #52525B; margin-top: 3px; line-height: 1.5; }}
         .example-tag {{
-            display: inline-block;
-            font-size: 0.75rem;
-            font-weight: 500;
-            color: #52525B;
-            background: #F4F3EE;
-            padding: 2px 8px;
-            border-radius: 6px;
-            margin-bottom: 4px;
+            display: inline-block; font-size: 0.75rem; font-weight: 500; color: #52525B;
+            background: #F4F3EE; padding: 2px 8px; border-radius: 6px; margin-bottom: 4px;
         }}
 
-        .clean-table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.91rem;
-            margin-top: 6px;
-        }}
+        .clean-table {{ width: 100%; border-collapse: collapse; font-size: 0.91rem; margin-top: 6px; }}
         .clean-table th {{
-            text-align: left;
-            padding: 9px 12px;
-            border-bottom: 1px solid #D4D4D8;
-            color: #52525B;
-            font-weight: 600;
-            background-color: #FAF9F6;
+            text-align: left; padding: 9px 12px; border-bottom: 1px solid #D4D4D8;
+            color: #52525B; font-weight: 600; background-color: #FAF9F6;
         }}
         .clean-table td {{
-            padding: 9px 12px;
-            border-bottom: 1px solid #E5E4DF;
-            color: #18181B;
-            vertical-align: top;
-            line-height: 1.5;
+            padding: 9px 12px; border-bottom: 1px solid #E5E4DF; color: #18181B;
+            vertical-align: top; line-height: 1.5;
         }}
 
         .note-callout {{
-            background-color: #F4F3EE;
-            border-left: 3px solid #18181B;
-            border-radius: 0 8px 8px 0;
-            padding: 12px 16px;
-            margin-top: 12px;
-            font-size: 0.91rem;
-            color: #18181B;
-            line-height: 1.62;
+            background-color: #F4F3EE; border-left: 3px solid #18181B; border-radius: 0 8px 8px 0;
+            padding: 12px 16px; margin-top: 12px; font-size: 0.91rem; color: #18181B; line-height: 1.62;
         }}
 
         .flashcard-minimal {{
-            background-color: #FFFFFF;
-            border: 1px solid #D4D4D8;
-            border-radius: 14px;
-            padding: 36px 24px;
-            text-align: center;
-            margin: 12px 0;
+            background-color: #FFFFFF; border: 1px solid #D4D4D8; border-radius: 14px;
+            padding: 36px 24px; text-align: center; margin: 12px 0;
         }}
         .flashcard-word {{ font-size: 1.72rem; font-weight: 700; color: #18181B; letter-spacing: -0.02em; }}
-        .flashcard-back {{ margin-top: 16px; padding-top: 16px; border-top: 1px solid #E5E4DF; font-size: 1.1rem; font-weight: 600; color: #18181B; }}
+        .flashcard-back {{
+            margin-top: 16px; padding-top: 16px; border-top: 1px solid #E5E4DF;
+            font-size: 1.1rem; font-weight: 600; color: #18181B;
+        }}
 
         @media (max-width: 768px) {{
             .main .block-container {{ padding: 1rem 0.85rem 2.5rem 0.85rem !important; }}
@@ -913,14 +1000,14 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
 
 
 # ==============================================================================
-# 5. PHÂN LOẠI ĐẦU VÀO, KIỂM SOÁT CHẤT LƯỢNG & ĐỘNG CƠ DỊCH API SIÊU TỐC
+# 5. PHÂN LOẠI ĐẦU VÀO, DÒ MODEL TỰ ĐỘNG (CACHE 1H) & KIỂM SOÁT CHẤT LƯỢNG
 # ==============================================================================
 def classify_input_type(text: str) -> str:
     """
-    Phân loại chính xác đầu vào để hiển thị đúng cấu trúc, không hiện kết quả thừa hoặc bừa:
-    - 'word': 1 từ đơn hoặc cụm danh từ rất ngắn (1-2 từ, không có dấu kết câu, 1 dòng)
-    - 'sentence': 1 câu ngắn/trung bình (3-25 từ, <= 1 dấu kết câu)
-    - 'paragraph': đoạn văn dài (>25 từ hoặc nhiều câu / nhiều dòng)
+    Phân loại chính xác đầu vào:
+    - 'word': từ đơn hoặc cụm từ/thuật ngữ ngắn (1-3 từ tiếng Nga hoặc 1-4 từ tiếng Việt, 1 dòng, không dấu kết câu)
+    - 'sentence': 1 câu hoàn chỉnh (<= 25 từ, <= 1 dấu kết câu)
+    - 'paragraph': đoạn văn nhiều câu / nhiều dòng
     """
     cleaned = text.strip()
     if not cleaned:
@@ -928,8 +1015,10 @@ def classify_input_type(text: str) -> str:
     lines = [ln for ln in cleaned.splitlines() if ln.strip()]
     words = cleaned.split()
     sentence_ends = len(re.findall(r"[.!?…]+", cleaned))
+    has_cyr = bool(re.search(r"[а-яА-ЯёЁ]", cleaned))
+    word_limit = 3 if has_cyr else 4
 
-    if len(lines) == 1 and len(words) <= 2 and sentence_ends == 0:
+    if len(lines) == 1 and len(words) <= word_limit and sentence_ends == 0:
         return "word"
     if len(lines) <= 2 and len(words) <= 25 and sentence_ends <= 1:
         return "sentence"
@@ -1005,6 +1094,53 @@ def generate_tts_audio(text: str, lang_code: str) -> Optional[bytes]:
         return None
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def discover_working_gemini_models(api_key: str) -> Tuple[List[str], Optional[str]]:
+    """
+    Dò đúng danh sách model mà API Key này được cấp phép (cache 1 tiếng nên chỉ tốn 1 lần duy nhất).
+    Trả về (danh_sách_model, thông_báo_lỗi_nếu_key_sai).
+    """
+    clean_k = clean_api_key(api_key)
+    if not clean_k:
+        return [], "Chưa có API Key."
+
+    discovered: List[str] = []
+    for api_ver in ("v1beta", "v1"):
+        try:
+            url = f"https://generativelanguage.googleapis.com/{api_ver}/models?key={urllib.parse.quote(clean_k)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for m in data.get("models", []):
+                    if "generateContent" in m.get("supportedGenerationMethods", []):
+                        short = m.get("name", "").replace("models/", "")
+                        if "gemini" in short and "embedding" not in short and "tts" not in short and "image" not in short:
+                            if short not in discovered:
+                                discovered.append(short)
+                if discovered:
+                    break
+        except urllib.error.HTTPError as http_err:
+            err_body = ""
+            try:
+                err_body = http_err.read().decode("utf-8", errors="ignore")
+            except Exception:
+                pass
+            if "API_KEY_INVALID" in err_body or http_err.code == 400:
+                return [], "Gemini API Key không hợp lệ hoặc đã bị thu hồi."
+            if "location is not supported" in err_body.lower():
+                return [], "Vị trí máy chủ hiện tại không được Gemini API hỗ trợ."
+        except Exception:
+            pass
+
+    if discovered:
+        ordered = [p for p in PREFERRED_GEMINI_MODELS if p in discovered]
+        flash_others = [d for d in discovered if "flash" in d and d not in ordered]
+        rest = [d for d in discovered if d not in ordered and d not in flash_others]
+        return ordered + flash_others + rest, None
+
+    return list(PREFERRED_GEMINI_MODELS), None
+
+
 def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[str]:
     headers_form = {
         "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
@@ -1012,51 +1148,24 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
     }
     post_body = urllib.parse.urlencode({"sl": src, "tl": tgt, "q": cleaned}).encode("utf-8")
 
-    try:
-        req1 = urllib.request.Request(
-            "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t",
-            data=post_body, headers=headers_form, method="POST",
-        )
-        with urllib.request.urlopen(req1, timeout=6) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, list) and data and isinstance(data[0], list):
-                chunks = [c[0] for c in data[0] if c and c[0]]
-                if chunks:
-                    return "".join(chunks)
-    except Exception:
-        pass
-
-    try:
-        req2 = urllib.request.Request(
-            "https://translate.google.com/translate_a/single?client=at&dt=t&dj=1",
-            data=post_body, headers=headers_form, method="POST",
-        )
-        with urllib.request.urlopen(req2, timeout=6) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            sentences = data.get("sentences", [])
-            if sentences:
-                chunks = [s.get("trans", "") for s in sentences if s.get("trans")]
-                if chunks:
-                    return "".join(chunks)
-    except Exception:
-        pass
-
-    try:
-        req3 = urllib.request.Request(
-            "https://clients5.google.com/translate_a/t?client=dict-chrome-ex",
-            data=post_body, headers=headers_form, method="POST",
-        )
-        with urllib.request.urlopen(req3, timeout=6) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, list) and data:
-                if isinstance(data[0], str):
-                    return data[0]
-                if isinstance(data[0], list):
-                    return "".join(str(x[0]) for x in data if isinstance(x, list) and x)
-            elif isinstance(data, dict) and "sentences" in data:
-                return "".join(s.get("trans", "") for s in data["sentences"] if s.get("trans"))
-    except Exception:
-        pass
+    for url in (
+        "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t",
+        "https://translate.google.com/translate_a/single?client=at&dt=t&dj=1",
+    ):
+        try:
+            req = urllib.request.Request(url, data=post_body, headers=headers_form, method="POST")
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, list) and data and isinstance(data[0], list):
+                    chunks = [c[0] for c in data[0] if c and c[0]]
+                    if chunks:
+                        return "".join(chunks)
+                if isinstance(data, dict) and data.get("sentences"):
+                    chunks = [s.get("trans", "") for s in data["sentences"] if s.get("trans")]
+                    if chunks:
+                        return "".join(chunks)
+        except Exception:
+            pass
 
     if GoogleTranslator is not None:
         try:
@@ -1100,30 +1209,28 @@ def fast_free_translate(text: str, src: str, tgt: str) -> str:
         while len(cache) > MAX_MEM_CACHE_SIZE:
             cache.popitem(last=False)
         return translated
-    return "Máy chủ dịch miễn phí đang tạm bận. Vui lòng thử lại sau vài giây hoặc nhập Gemini API Key ở thanh bên."
+    return "Máy chủ dịch miễn phí đang tạm bận. Vui lòng thử lại sau vài giây."
 
 
 def call_gemini_fast_rest(
     api_key: str,
-    parts: List[Dict[str, Any]],
-    temperature: float = 0.15,
-    timeout_sec: int = 20,
+    prompt_text: str,
+    temperature: float = 0.1,
+    timeout_sec: int = 22,
 ) -> Tuple[Optional[str], Optional[str], str]:
-    """
-    Gọi Gemini API tốc độ cao:
-    - Không gọi GET /models thừa ở mỗi lượt.
-    - Ghim ngay model phản hồi nhanh nhất thành công vào session_state cho các lần sau.
-    - Tắt thinkingBudget=0 trên gemini-2.5-flash để phản hồi tức thì (~1 giây).
-    """
     clean_k = clean_api_key(api_key)
     if not clean_k:
-        return None, "Empty API Key", ""
+        return None, "Chưa nhập API Key.", ""
+
+    discovered, key_err = discover_working_gemini_models(clean_k)
+    if key_err:
+        return None, key_err, ""
 
     pinned = st.session_state.get("pinned_gemini_model", "")
-    models = ([pinned] + [m for m in FAST_GEMINI_MODELS if m != pinned]) if pinned else list(FAST_GEMINI_MODELS)
+    models = ([pinned] + [m for m in discovered if m != pinned]) if (pinned and pinned in discovered) else discovered
     last_error = ""
 
-    for model_name in models:
+    for model_name in models[:5]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(clean_k)}"
         gen_cfg: Dict[str, Any] = {
             "temperature": temperature,
@@ -1132,7 +1239,7 @@ def call_gemini_fast_rest(
         if "2.5" in model_name:
             gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
 
-        payload = {"contents": [{"parts": parts}], "generationConfig": gen_cfg}
+        payload = {"contents": [{"parts": [{"text": prompt_text}]}], "generationConfig": gen_cfg}
         for attempt in range(2):
             try:
                 req = urllib.request.Request(
@@ -1153,20 +1260,22 @@ def call_gemini_fast_rest(
                     err_body = http_err.read().decode("utf-8", errors="ignore")
                 except Exception:
                     pass
-                last_error = f"HTTP {http_err.code}"
+                last_error = f"HTTP {http_err.code}: {err_body[:160]}"
                 if "API_KEY_INVALID" in err_body:
-                    return None, "Gemini API Key không hợp lệ.", ""
-                if http_err.code == 400 and "thinkingConfig" in payload["generationConfig"]:
-                    payload["generationConfig"].pop("thinkingConfig", None)
+                    return None, "Gemini API Key không chính xác.", ""
+                if "location is not supported" in err_body.lower():
+                    return None, "Gemini API chặn khu vực IP hiện tại.", ""
+                if http_err.code == 400 and ("thinkingConfig" in err_body or "responseMimeType" in err_body):
+                    payload["generationConfig"] = {"temperature": temperature}
                     continue
                 if http_err.code in (429, 503) and attempt == 0:
-                    time.sleep(0.5)
+                    time.sleep(0.6)
                     continue
                 break
             except Exception as exc:
                 last_error = str(exc)
                 break
-    return None, last_error, ""
+    return None, last_error or "Không nhận được phản hồi từ Gemini API.", ""
 
 
 def _parse_json_response(raw_text: str) -> Optional[Dict]:
@@ -1178,16 +1287,13 @@ def _parse_json_response(raw_text: str) -> Optional[Dict]:
 
 
 def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dict[str, Any]:
-    """
-    Kiểm soát chặt chất lượng đầu ra: lọc bỏ mọi bảng/trường rỗng, placeholder hoặc sai loại đầu vào
-    để tuyệt đối không hiện kết quả bừa.
-    """
+    """Kiểm soát chất lượng đầu ra: lọc rác nhưng KHÔNG xóa nhầm dữ liệu ngữ pháp hợp lệ."""
     if not isinstance(parsed, dict):
         return {}
 
     def _valid_str(v: Any) -> str:
         s = str(v or "").strip()
-        if s.lower() in ("", "...", "n/a", "none", "null", "không có", "—", "-"):
+        if s.lower() in ("", "...", "n/a", "none", "null", "không có"):
             return ""
         return s
 
@@ -1205,7 +1311,7 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
         "vocabulary_table": [],
     }
 
-    # 1. Chỉ cho phép bảng chia 6 cách / chia động từ khi đầu vào là từ đơn/cụm ngắn
+    # 1. Hình thái học (6 cách / chia động từ) khi tra từ đơn hoặc cụm từ ngắn
     if input_kind == "word" and isinstance(parsed.get("morphology"), dict):
         m = parsed["morphology"]
         clean_m: Dict[str, Any] = {
@@ -1217,28 +1323,26 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
 
         raw_cases = m.get("cases_table")
         if isinstance(raw_cases, list) and len(raw_cases) == 6:
-            valid_cases = [
-                {
-                    "case": _valid_str(r.get("case")),
-                    "singular": _valid_str(r.get("singular")) or "—",
-                    "plural": _valid_str(r.get("plural")) or "—",
-                }
-                for r in raw_cases
-                if isinstance(r, dict) and _valid_str(r.get("case")) and (_valid_str(r.get("singular")) or _valid_str(r.get("plural")))
-            ]
+            valid_cases = []
+            for r in raw_cases:
+                if isinstance(r, dict) and _valid_str(r.get("case")):
+                    sg = str(r.get("singular") or "—").strip() or "—"
+                    pl = str(r.get("plural") or "—").strip() or "—"
+                    if sg != "—" or pl != "—":
+                        valid_cases.append({"case": _valid_str(r.get("case")), "singular": sg, "plural": pl})
             if len(valid_cases) == 6:
                 clean_m["cases_table"] = valid_cases
 
         raw_conj = m.get("verb_conjugation")
         if isinstance(raw_conj, dict):
-            valid_conj = {str(k).strip(): _valid_str(v) for k, v in raw_conj.items() if _valid_str(v)}
-            if len(valid_conj) >= 6:
+            valid_conj = {str(k).strip(): _valid_str(v) for k, v in raw_conj.items() if _valid_str(v) and _valid_str(v) != "—"}
+            if len(valid_conj) >= 4:
                 clean_m["verb_conjugation"] = valid_conj
 
         if clean_m.get("cases_table") or clean_m.get("verb_conjugation") or clean_m.get("usage_note"):
             out["morphology"] = clean_m
 
-    # 2. Giải thích ngữ pháp câu/đoạn (chỉ giữ mục có đủ cụm từ + giải thích thật)
+    # 2. Giải thích ngữ pháp câu / đoạn
     if input_kind in ("sentence", "paragraph") and isinstance(parsed.get("sentence_grammar"), list):
         out["sentence_grammar"] = [
             {
@@ -1250,7 +1354,7 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
             if isinstance(g, dict) and _valid_str(g.get("segment")) and _valid_str(g.get("explanation"))
         ][:8]
 
-    # 3. Ví dụ áp dụng theo ngữ cảnh (bắt buộc có cả câu tiếng Nga & nghĩa tiếng Việt)
+    # 3. Ví dụ áp dụng theo ngữ cảnh
     if isinstance(parsed.get("context_examples"), list):
         out["context_examples"] = [
             {
@@ -1262,7 +1366,7 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
             if isinstance(ex, dict) and _valid_str(ex.get("ru")) and _valid_str(ex.get("vi"))
         ][:4]
 
-    # 4. Tiếng lóng (chỉ giữ khi thực sự có trong văn bản)
+    # 4. Tiếng lóng
     if isinstance(parsed.get("slang_explanations"), list):
         out["slang_explanations"] = [
             {
@@ -1274,7 +1378,7 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
             if isinstance(s, dict) and _valid_str(s.get("term")) and _valid_str(s.get("meaning_vi"))
         ]
 
-    # 5. Bảng từ vựng (có dấu trọng âm)
+    # 5. Bảng từ vựng
     if isinstance(parsed.get("vocabulary_table"), list):
         out["vocabulary_table"] = [
             {
@@ -1292,7 +1396,6 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
 def call_gemini_smart_translate(
     api_key: str, source_text: str, direction: str
 ) -> Tuple[Optional[Dict], Optional[str], float, str]:
-    """Dịch & phân tích chính xác theo loại đầu vào (word / sentence / paragraph) có LRU cache."""
     t0 = time.perf_counter()
     input_kind = classify_input_type(source_text)
 
@@ -1304,36 +1407,38 @@ def call_gemini_smart_translate(
 
     if input_kind == "word":
         task_instruction = """
-Đầu vào là TỪ ĐƠN hoặc CỤM TỪ NGẮN. Quy tắc kiểm soát chất lượng NGHIÊM NGẶT:
-- Xác định đúng từ loại tiếng Nga (Danh từ / Tính từ / Đại từ / Động từ / Trạng từ / Giới từ).
-- Nếu là ĐỘNG TỪ: điền CHÍNH XÁC 100% bảng `verb_conjugation` (я, ты, он/она/оно, мы, вы, они, Quá khứ, Mệnh lệnh), ghi rõ cặp thể НСВ/СВ vào `aspect_or_gender`, đặt `cases_table` = [].
-- Nếu là DANH TỪ / TÍNH TỪ / ĐẠI TỪ: điền CHÍNH XÁC 100% đủ 6 cách vào `cases_table` (1. Именительный -> 6. Предложный, cả số ít & số nhiều, kể cả bất quy tắc/biến âm, đặt dấu trọng âm \\u0301). Nếu danh từ chỉ có số ít (như молоко) thì plural ghi "—". Đặt `verb_conjugation` = {}.
-- Nếu là TRẠNG TỪ / TỪ KHÔNG BIẾN CÁCH: đặt `cases_table` = [], `verb_conjugation` = {}, giải thích cách dùng & cấp so sánh (nếu có) vào `usage_note`.
-- Đặt `sentence_grammar` = [].
-- Tạo đúng 3 ví dụ thực tế (`context_examples`) áp dụng CHÍNH từ này trong ngữ cảnh tự nhiên (đại học, đời sống, hoặc kỹ thuật tùy nghĩa của từ), có dấu trọng âm \\u0301 và dịch tiếng Việt chuẩn.
+Đầu vào là TỪ ĐƠN hoặc CỤM TỪ NGẮN (dù người dùng nhập tiếng Nga hay tiếng Việt, luôn phân tích hình thái của TỪ TIẾNG NGA tương ứng!).
+BẮT BUỘC thực hiện chính xác:
+1. Xác định đúng từ loại tiếng Nga (Danh từ / Tính từ / Đại từ / Động từ / Trạng từ).
+2. Nếu là ĐỘNG TỪ: BẮT BUỘC điền đủ bảng `verb_conjugation` (я, ты, он / она / оно, мы, вы, они, Quá khứ, Mệnh lệnh) và ghi rõ cặp thể НСВ / СВ vào `aspect_or_gender`. Để `cases_table` = [].
+3. Nếu là DANH TỪ / TÍNH TỪ / ĐẠI TỪ / CỤM DANH TỪ: BẮT BUỘC điền CHÍNH XÁC ĐỦ 6 CÁCH vào `cases_table`:
+   1. Именительный (Cách 1), 2. Родительный (Cách 2), 3. Дательный (Cách 3), 4. Винительный (Cách 4), 5. Творительный (Cách 5), 6. Предложный (Cách 6) — có dấu trọng âm \\u0301, đủ số ít `singular` và số nhiều `plural` (nếu từ không có số nhiều thì ghi "—"). Để `verb_conjugation` = {}.
+4. Nếu là TRẠNG TỪ / TỪ KHÔNG BIẾN CÁCH: để `cases_table` = [], `verb_conjugation` = {}, giải thích chi tiết cách dùng & cấp so sánh vào `usage_note`.
+5. BẮT BUỘC tạo đúng 3 ví dụ áp dụng thực tế (`context_examples`) chứa CHÍNH từ tiếng Nga này trong ngữ cảnh tự nhiên (đại học, đời sống hoặc chuyên ngành), có dấu trọng âm \\u0301 và nghĩa tiếng Việt.
+6. Đặt `sentence_grammar` = [].
 """
     elif input_kind == "sentence":
         task_instruction = """
-Đầu vào là MỘT CÂU HOÀN CHỈNH. Quy tắc kiểm soát chất lượng NGHIÊM NGẶT:
-- Đặt `morphology` = {} (không chia 6 cách bừa bãi cho cả câu).
-- Điền `sentence_grammar` phân tích 3–6 điểm ngữ pháp cốt lõi trong câu tiếng Nga (chỉ rõ từ/cụm nào chia Cách mấy, tại sao, động từ thể НСВ/СВ nào, giới từ đi kèm). Không suy diễn sai.
-- Tạo 2–3 ví dụ áp dụng (`context_examples`) dùng lại cấu trúc ngữ pháp hoặc từ khóa chính trong câu này vào tình huống thực tế của sinh viên tại Nga.
-- Điền `vocabulary_table` 3–6 từ khóa quan trọng nhất trong câu (có dấu trọng âm \\u0301).
+Đầu vào là MỘT CÂU HOÀN CHỈNH. BẮT BUỘC thực hiện chính xác:
+1. Đặt `morphology` = {}.
+2. BẮT BUỘC điền `sentence_grammar` (3–6 mục) phân tích chính xác ngữ pháp của câu tiếng Nga: từ/cụm nào chia Cách mấy, tại sao, động từ thể НСВ/СВ nào & thì gì.
+3. BẮT BUỘC tạo 2–3 ví dụ áp dụng (`context_examples`) dùng lại cấu trúc hoặc từ khóa chính của câu vào tình huống thực tế.
+4. Điền `vocabulary_table` 3–6 từ khóa quan trọng (có dấu trọng âm \\u0301).
 """
     else:
         task_instruction = """
-Đầu vào là ĐOẠN VĂN DÀI. Quy tắc kiểm soát chất lượng NGHIÊM NGẶT:
-- Dịch toàn bộ đoạn văn mạch lạc, giữ đúng bố cục xuống dòng, chuẩn thuật ngữ.
-- Đặt `morphology` = {}.
-- Điền `sentence_grammar` chỉ chọn 3–5 cấu trúc ngữ pháp / cách chia đáng chú ý nhất trong đoạn.
-- Điền `vocabulary_table` 5–8 thuật ngữ / từ vựng quan trọng nhất trong đoạn (có dấu trọng âm \\u0301).
-- Tạo 2 ví dụ áp dụng (`context_examples`) minh họa cách dùng các thuật ngữ/cấu trúc nổi bật trong đoạn.
+Đầu vào là ĐOẠN VĂN DÀI. BẮT BUỘC thực hiện chính xác:
+1. Dịch toàn bộ đoạn văn chuẩn xác, giữ nguyên bố cục xuống dòng.
+2. Đặt `morphology` = {}.
+3. Điền `sentence_grammar` 3–5 điểm ngữ pháp / cấu trúc đáng chú ý nhất trong đoạn.
+4. Điền `vocabulary_table` 5–8 thuật ngữ trọng tâm (có dấu trọng âm \\u0301).
+5. BẮT BUỘC tạo 2 ví dụ áp dụng (`context_examples`) cho các thuật ngữ/cấu trúc nổi bật nhất trong đoạn.
 """
 
     system_prompt = f"""
-Bạn là giáo sư ngôn ngữ học Nga – Việt. Chiều dịch: "{direction}".
+Bạn là giáo sư ngôn ngữ học Nga – Việt chuyên sâu về thuật ngữ đại học và dịch thuật song ngữ Nga-Việt. Chiều dịch: "{direction}".
 {task_instruction}
-CHỈ TRẢ VỀ đúng 1 JSON hợp lệ (tuyệt đối không bịa đặt thông tin không chắc chắn):
+CHỈ TRẢ VỀ đúng 1 JSON hợp lệ:
 {{
   "main_translation": "Bản dịch chuẩn xác nhất",
   "ru_version": "Bản tiếng Nga tương ứng",
@@ -1356,9 +1461,9 @@ CHỈ TRẢ VỀ đúng 1 JSON hợp lệ (tuyệt đối không bịa đặt th
 """
     raw_text, err, model_used = call_gemini_fast_rest(
         api_key=api_key,
-        parts=[{"text": f"{system_prompt}\n\nVăn bản:\n{source_text.strip()}"}],
+        prompt_text=f"{system_prompt}\n\nVăn bản cần xử lý:\n{source_text.strip()}",
         temperature=0.1,
-        timeout_sec=20,
+        timeout_sec=22,
     )
     elapsed = time.perf_counter() - t0
     if not raw_text:
@@ -1368,50 +1473,13 @@ CHỈ TRẢ VỀ đúng 1 JSON hợp lệ (tuyệt đối không bịa đặt th
         parsed = _parse_json_response(raw_text)
         cleaned = validate_and_clean_ai_result(parsed or {}, input_kind)
         if not cleaned.get("main_translation"):
-            return None, "Kết quả trống", elapsed, model_used
+            return None, "Gemini trả về JSON không có bản dịch.", elapsed, model_used
         ai_cache[cache_key] = cleaned
         while len(ai_cache) > MAX_AI_CACHE_SIZE:
             ai_cache.popitem(last=False)
         return cleaned, None, elapsed, model_used
     except Exception as exc:
-        return None, str(exc), elapsed, model_used
-
-
-def call_gemini_ocr_and_translate_image(
-    api_key: str, image_bytes: bytes, mime_type: str, direction: str
-) -> Tuple[Optional[Dict], Optional[str]]:
-    b64_img = base64.b64encode(image_bytes).decode("utf-8")
-    prompt = f"""
-Đọc chính xác chữ trong ảnh (slide bài giảng, bảng viết hoặc tài liệu), dịch theo chiều "{direction}", giải thích ngắn gọn ngữ pháp quan trọng và đưa ra 2 ví dụ áp dụng.
-CHỈ TRẢ VỀ JSON:
-{{
-  "extracted_text": "Văn bản gốc đọc được từ ảnh",
-  "main_translation": "Bản dịch chuẩn xác",
-  "ru_version": "Bản tiếng Nga",
-  "vi_version": "Bản tiếng Việt",
-  "en_version": "Bản tiếng Anh",
-  "sentence_grammar": [{{"segment": "", "grammar_tag": "", "explanation": ""}}],
-  "context_examples": [{{"context": "", "ru": "", "vi": ""}}],
-  "slang_explanations": [],
-  "vocabulary_table": [{{"ru_accent": "", "vi": "", "en": ""}}],
-  "context_note": "Tóm tắt 1-2 ý chính cần nhớ từ ảnh."
-}}
-"""
-    raw_text, err, _ = call_gemini_fast_rest(
-        api_key=api_key,
-        parts=[{"text": prompt}, {"inlineData": {"mimeType": mime_type, "data": b64_img}}],
-        temperature=0.1,
-        timeout_sec=28,
-    )
-    if not raw_text:
-        return None, err
-    try:
-        parsed = _parse_json_response(raw_text) or {}
-        cleaned = validate_and_clean_ai_result(parsed, "paragraph")
-        cleaned["extracted_text"] = str(parsed.get("extracted_text", "")).strip()
-        return cleaned, None
-    except Exception as exc:
-        return None, str(exc)
+        return None, f"Lỗi đọc JSON từ Gemini: {exc}", elapsed, model_used
 
 
 def extract_text_from_uploaded_doc(uploaded_file) -> Tuple[Optional[str], Optional[str]]:
@@ -1441,19 +1509,13 @@ def extract_text_from_uploaded_doc(uploaded_file) -> Tuple[Optional[str], Option
             reader = PdfReader(io.BytesIO(raw_bytes))
             pages = [page.extract_text() or "" for page in reader.pages[:15]]
             text = "\n\n".join(p.strip() for p in pages if p.strip())
-            if not text:
-                return None, "Tệp PDF này là ảnh scan. Hãy chụp ảnh trang cần dịch và tải vào mục Ảnh."
-            return text, None
+            return (text, None) if text else (None, "Tệp PDF này không có lớp văn bản để trích xuất.")
         except Exception as exc:
             return None, f"Lỗi đọc tệp .pdf: {exc}"
     return None, "Định dạng tệp chưa được hỗ trợ."
 
 
 def fallback_fast_translate(source_text: str, direction: str) -> Dict[str, Any]:
-    """
-    Chế độ dịch miễn phí (không cần API Key): chỉ dịch chính xác & nhận diện tiếng lóng đã kiểm chứng,
-    TUYỆT ĐỐI không chia 6 cách đoán mò gây sai ngoại lệ.
-    """
     input_kind = classify_input_type(source_text)
     text_for_trans = source_text.strip()
     detected_slang = detect_slang_in_text(text_for_trans)
@@ -1515,7 +1577,7 @@ def fallback_fast_translate(source_text: str, direction: str) -> Dict[str, Any]:
         "context_examples": examples,
         "slang_explanations": slang_explanations,
         "vocabulary_table": vocab_list,
-        "context_note": "Nhập Gemini API Key (miễn phí) ở thanh bên trái để bật chia 6 cách / chia động từ chính xác (kể cả ngoại lệ), phân tích ngữ pháp câu dài và sinh ví dụ áp dụng theo ngữ cảnh.",
+        "context_note": "Nhập Gemini API Key (miễn phí) ở thanh bên trái để bật chia 6 cách, chia động từ theo ngôi, phân tích ngữ pháp câu dài và ví dụ áp dụng.",
     }
 
 
@@ -2061,7 +2123,7 @@ def render_vocab_and_practice_tab() -> None:
 
 
 # ==============================================================================
-# 8. HIỂN THỊ KẾT QUẢ DỊCH (CHÍNH XÁC THEO LOẠI: TỪ / CÂU / ĐOẠN)
+# 8. HIỂN THỊ KẾT QUẢ DỊCH & KHỞI TẠO SESSION BỀN VỮNG
 # ==============================================================================
 def init_session_state() -> None:
     defaults: Dict[str, Any] = {
@@ -2083,18 +2145,20 @@ def init_session_state() -> None:
         if k not in st.session_state:
             st.session_state[k] = v
 
-    rec_key, rec_prof = consume_bootstrap_query_params()
+    # Nạp bền vững từ Query Bootstrap -> Browser Cookie -> Client Vault
+    rec_key, rec_prof = load_persisted_user_data()
     if rec_key and not st.session_state["saved_gemini_api_key"]:
         st.session_state["saved_gemini_api_key"] = rec_key
-    if rec_prof:
+    if rec_prof and not st.session_state.get("confirmed_user_name"):
         st.session_state["confirmed_user_name"] = rec_prof["full_name"]
         st.session_state["confirmed_user_year"] = rec_prof["student_year"]
         st.session_state["confirmed_user_uni"] = rec_prof["university"]
 
-    if not st.session_state.get("ls_sync_checked"):
-        st.session_state["ls_sync_checked"] = True
+    # Nếu vẫn thiếu key hoặc profile sau khi F5 -> đồng bộ từ localStorage của trình duyệt (chỉ 1 lần / session mới)
+    if not st.session_state.get("ls_bootstrapped_this_session"):
+        st.session_state["ls_bootstrapped_this_session"] = True
         if not st.session_state.get("saved_gemini_api_key") or not st.session_state.get("confirmed_user_name"):
-            inject_localstorage_sync(action="load_all")
+            persist_browser_state("bootstrap_from_localstorage")
 
 
 def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
@@ -2124,7 +2188,6 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
             if audio_b:
                 st.audio(audio_b, format="audio/mp3")
 
-    # 1. CHIA 6 CÁCH HOẶC CHIA ĐỘNG TỪ (CHỈ KHI ĐẦU VÀO LÀ TỪ ĐƠN VÀ DỮ LIỆU HỢP LỆ)
     morph = res.get("morphology") or {}
     cases_table = morph.get("cases_table") or []
     verb_conj = morph.get("verb_conjugation") or {}
@@ -2175,7 +2238,6 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
         if usage_note:
             render_html(f'<div class="note-callout"><b>Cách dùng ({esc(meta_line)}):</b> {esc(usage_note)}</div>')
 
-    # 2. GIẢI THÍCH NGỮ PHÁP TRONG CÂU / ĐOẠN
     sent_grammar = res.get("sentence_grammar") or []
     if sent_grammar:
         g_rows = "".join(
@@ -2194,7 +2256,6 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
             """
         )
 
-    # 3. VÍ DỤ ÁP DỤNG THEO NGỮ CẢNH (THAY CHO PHẦN TRANG TRỌNG / THÂN MẬT)
     examples = res.get("context_examples") or []
     if examples:
         ex_html = "".join(
@@ -2223,7 +2284,6 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
                     if ab:
                         st.audio(ab, format="audio/mp3")
 
-    # 4. TIẾNG LÓNG (CHỈ HIỆN KHI CÓ TRONG VĂN BẢN)
     slang_list = res.get("slang_explanations") or []
     if slang_list:
         slang_rows = "".join(
@@ -2242,7 +2302,6 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
             """
         )
 
-    # 5. BẢNG TỪ VỰNG TRỌNG TÂM + NÚT LƯU ÔN TẬP
     vocab_table = res.get("vocabulary_table") or []
     if vocab_table:
         v_rows = "".join(
@@ -2304,45 +2363,52 @@ def main() -> None:
             """
         )
 
+        # Thực thi ghi cookie/localStorage sau khi rerun ổn định
+        if st.session_state.get("pending_key_save"):
+            k_save = st.session_state.pop("pending_key_save")
+            persist_browser_state("save_key", api_key=k_save)
+        if st.session_state.get("pending_key_delete"):
+            st.session_state.pop("pending_key_delete")
+            persist_browser_state("delete_key")
+        if st.session_state.get("pending_profile_save"):
+            prof = st.session_state.pop("pending_profile_save")
+            persist_browser_state("save_profile", student_profile=prof)
+
         st.markdown("#### Cài đặt API")
         saved_key_val = clean_api_key(st.session_state.get("saved_gemini_api_key", ""))
         gemini_api_key = st.text_input(
             "Gemini API Key",
             value=saved_key_val,
             type="password",
-            placeholder="Dán key để bật dịch AI siêu tốc & 6 cách",
+            placeholder="Dán key để bật dịch AI, 6 cách & ví dụ",
         )
         st.markdown(f"[Lấy Gemini API Key miễn phí →]({GEMINI_API_KEY_URL})")
 
         clean_key_input = clean_api_key(gemini_api_key)
-        if clean_key_input and clean_key_input != saved_key_val and clean_key_input not in st.session_state["declined_keys"]:
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("Lưu trên máy", type="primary", use_container_width=True):
-                    st.session_state["saved_gemini_api_key"] = clean_key_input
-                    inject_localstorage_sync(action="save_key", key_to_save=clean_key_input)
-                    st.toast("Đã lưu API Key trên trình duyệt.")
-                    st.rerun()
-            with c2:
-                if st.button("Chỉ phiên này", use_container_width=True):
-                    st.session_state["declined_keys"].add(clean_key_input)
-                    st.rerun()
-        elif clean_key_input and clean_key_input == saved_key_val:
-            pinned = st.session_state.get("pinned_gemini_model", "gemini-2.0-flash-lite")
-            st.caption(f"Đã lưu Key · Model nhanh: `{pinned}`")
-            if st.button("Xóa Key đã lưu", use_container_width=True):
+        # Tự động lưu ngay khi người dùng dán Key hợp lệ mới (chỉ cần nhập 1 lần duy nhất!)
+        if clean_key_input and clean_key_input != saved_key_val and len(clean_key_input) >= 20:
+            st.session_state["saved_gemini_api_key"] = clean_key_input
+            st.session_state["pending_key_save"] = clean_key_input
+            st.session_state.pop("pinned_gemini_model", None)
+            st.toast("Đã tự động lưu API Key cho các lần truy cập sau.")
+            st.rerun()
+
+        if clean_key_input:
+            models_avail, key_err = discover_working_gemini_models(clean_key_input)
+            if key_err:
+                st.error(key_err)
+            else:
+                top_m = st.session_state.get("pinned_gemini_model") or (models_avail[0] if models_avail else "gemini-flash")
+                st.caption(f"Đã lưu Key vĩnh viễn · Model: `{top_m}`")
+            if st.button("Xóa / Đổi API Key", use_container_width=True):
                 st.session_state["saved_gemini_api_key"] = ""
+                st.session_state["pending_key_delete"] = True
                 st.session_state.pop("pinned_gemini_model", None)
-                inject_localstorage_sync(action="delete_key")
                 st.rerun()
         else:
-            st.caption("Đang dùng chế độ miễn phí (không cần Key).")
+            st.caption("Chưa nhập Key — đang dùng chế độ dịch nhanh cơ bản.")
 
         st.markdown("---")
-
-        if st.session_state.get("pending_profile_save"):
-            prof = st.session_state.pop("pending_profile_save")
-            inject_localstorage_sync(action="save_profile", student_profile=prof)
 
         has_prof = bool(st.session_state.get("confirmed_user_name") and st.session_state.get("confirmed_user_uni"))
         with st.expander("Thông tin sinh viên" + (f" · {st.session_state['confirmed_user_name']}" if has_prof else ""), expanded=not has_prof):
@@ -2354,14 +2420,13 @@ def main() -> None:
                 u_uni = st.text_input("Trường theo học", value=st.session_state.get("confirmed_user_uni", ""), placeholder="СПбГМТУ, ИТМО, СПбГУ...")
                 if st.form_submit_button("Lưu thông tin", type="primary", use_container_width=True):
                     if u_name.strip() and u_uni.strip():
-                        st.session_state["confirmed_user_name"] = u_name.strip()
-                        st.session_state["confirmed_user_year"] = u_year
-                        st.session_state["confirmed_user_uni"] = u_uni.strip()
-                        send_user_notification_email(u_name.strip(), u_year, u_uni.strip())
-                        st.session_state["pending_profile_save"] = {
-                            "full_name": u_name.strip(), "student_year": u_year, "university": u_uni.strip()
-                        }
-                        st.toast("Đã lưu thông tin sinh viên.")
+                        prof_obj = {"full_name": u_name.strip(), "student_year": u_year, "university": u_uni.strip()}
+                        st.session_state["confirmed_user_name"] = prof_obj["full_name"]
+                        st.session_state["confirmed_user_year"] = prof_obj["student_year"]
+                        st.session_state["confirmed_user_uni"] = prof_obj["university"]
+                        send_user_notification_email(prof_obj["full_name"], prof_obj["student_year"], prof_obj["university"])
+                        st.session_state["pending_profile_save"] = prof_obj
+                        st.toast("Đã lưu thông tin sinh viên cho các lần sau.")
                         st.rerun()
                     else:
                         st.warning("Vui lòng nhập họ tên và tên trường.")
@@ -2390,7 +2455,6 @@ def main() -> None:
                     st.session_state["is_author_admin"] = False
                     st.rerun()
 
-    # HEADER TỐI GIẢN KÈM ẢNH & THÔNG TIN TÁC GIẢ
     render_html(
         f"""
         <div class="minimal-header">
@@ -2412,7 +2476,7 @@ def main() -> None:
     tab1, tab2, tab3 = st.tabs(["Dịch & Ngữ pháp", "Từ vựng & Ôn tập", "Kiến thức tiếng Nga"])
 
     # ==========================================================================
-    # TAB 1: DỊCH SIÊU TỐC, 6 CÁCH, CHIA ĐỘNG TỪ, VÍ DỤ ÁP DỤNG & OCR
+    # TAB 1: DỊCH SIÊU TỐC, 6 CÁCH, CHIA ĐỘNG TỪ & VÍ DỤ ÁP DỤNG (ĐÃ BỎ ẢNH SLIDE)
     # ==========================================================================
     with tab1:
         dir_c1, dir_c2 = st.columns([5, 1])
@@ -2436,7 +2500,7 @@ def main() -> None:
             key="input_text_area",
             height=145,
             label_visibility="collapsed",
-            placeholder="Nhập 1 từ tiếng Nga để chia 6 cách / chia động từ, hoặc dán câu / đoạn văn để dịch, giải thích ngữ pháp và xem ví dụ áp dụng...",
+            placeholder="Nhập 1 từ tiếng Nga (hoặc tiếng Việt) để chia 6 cách / chia động từ, hoặc dán câu / đoạn văn để dịch, giải thích ngữ pháp và xem ví dụ áp dụng...",
         )
 
         b1, b2, b3, b4 = st.columns([1.8, 1.4, 1.0, 2.8])
@@ -2450,42 +2514,20 @@ def main() -> None:
                 st.rerun()
         with b4:
             if source_text.strip():
-                k_map = {"word": "Từ đơn", "sentence": "Câu", "paragraph": "Đoạn văn"}
+                k_map = {"word": "Từ / Cụm ngắn", "sentence": "Câu", "paragraph": "Đoạn văn"}
                 detected_k = k_map[classify_input_type(source_text)]
                 st.caption(f"{detected_k} · {len(source_text)} ký tự · {len(source_text.split())} từ")
 
-        with st.expander("Dịch từ ảnh chụp slide / bảng viết hoặc tệp tài liệu (.txt, .docx, .pdf)"):
-            u1, u2 = st.columns(2)
-            with u1:
-                uploaded_img = st.file_uploader("Ảnh chụp slide / bảng / tin nhắn", type=["png", "jpg", "jpeg", "webp"])
-                if uploaded_img is not None:
-                    st.image(uploaded_img, width=220)
-                    if st.button("Quét chữ & dịch ảnh", type="primary", use_container_width=True):
-                        if not clean_key_input:
-                            st.warning("Cần nhập Gemini API Key (miễn phí) ở thanh bên trái để đọc chữ trong ảnh.")
-                        else:
-                            with st.spinner("Đang đọc chữ và dịch..."):
-                                ocr_res, ocr_err = call_gemini_ocr_and_translate_image(
-                                    clean_key_input, uploaded_img.getvalue(), uploaded_img.type or "image/jpeg", direction
-                                )
-                                if ocr_res:
-                                    if ocr_res.get("extracted_text"):
-                                        st.session_state["input_text_area"] = ocr_res["extracted_text"]
-                                    st.session_state["last_translation_result"] = ocr_res
-                                    st.session_state["last_meta_badge"] = "Gemini Vision OCR"
-                                    st.rerun()
-                                else:
-                                    st.error(f"Không thể xử lý ảnh: {ocr_err}")
-            with u2:
-                uploaded_doc = st.file_uploader("Tệp tài liệu (.txt, .docx, .pdf)", type=["txt", "md", "docx", "pdf"])
-                if uploaded_doc is not None:
-                    if st.button("Đưa nội dung vào ô dịch", use_container_width=True):
-                        txt, err = extract_text_from_uploaded_doc(uploaded_doc)
-                        if err:
-                            st.warning(err)
-                        elif txt:
-                            st.session_state["input_text_area"] = txt[:8000]
-                            st.rerun()
+        with st.expander("Tải tệp văn bản (.txt, .docx, .pdf)"):
+            uploaded_doc = st.file_uploader("Chọn tệp tài liệu", type=["txt", "md", "docx", "pdf"], label_visibility="collapsed")
+            if uploaded_doc is not None:
+                if st.button("Đưa nội dung tệp vào ô dịch", use_container_width=True):
+                    txt, err = extract_text_from_uploaded_doc(uploaded_doc)
+                    if err:
+                        st.warning(err)
+                    elif txt:
+                        st.session_state["input_text_area"] = txt[:8000]
+                        st.rerun()
 
         if tts_clicked and source_text.strip():
             has_cyr = bool(re.search(r"[а-яА-ЯёЁ]", source_text))
@@ -2501,14 +2543,15 @@ def main() -> None:
                 result_data: Optional[Dict] = None
                 meta_badge = "Dịch nhanh"
                 if clean_key_input:
-                    with st.spinner("Đang dịch..."):
+                    with st.spinner("Đang dịch và phân tích ngữ pháp bằng Gemini AI..."):
                         result_data, g_err, elapsed, model_used = call_gemini_smart_translate(
                             clean_key_input, source_text, direction
                         )
                         if result_data:
                             meta_badge = f"{model_used} · {elapsed:.2f}s"
-                        elif g_err and "không hợp lệ" in g_err.lower():
-                            st.warning("API Key không hợp lệ, đã tự động chuyển sang dịch nhanh.")
+                        elif g_err:
+                            # Báo rõ lý do lỗi API để người dùng biết, KHÔNG âm thầm bỏ qua!
+                            st.warning(f"Gemini API chưa phản hồi ({g_err}). Tạm thời hiển thị kết quả dịch nhanh cơ bản.")
 
                 if not result_data:
                     t_free = time.perf_counter()
@@ -2549,15 +2592,9 @@ def main() -> None:
                             st.session_state["last_meta_badge"] = h["meta_badge"]
                             st.rerun()
 
-    # ==========================================================================
-    # TAB 2: TỪ VỰNG & ÔN TẬP (FLASHCARDS + QUIZ TRẮC NGHIỆM + SỔ TỪ VỰNG)
-    # ==========================================================================
     with tab2:
         render_vocab_and_practice_tab()
 
-    # ==========================================================================
-    # TAB 3: KIẾN THỨC TIẾNG NGA CHI TIẾT (7 CHUYÊN ĐỀ)
-    # ==========================================================================
     with tab3:
         render_russian_knowledge_hub()
 
