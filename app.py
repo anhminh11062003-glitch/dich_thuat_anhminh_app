@@ -400,26 +400,40 @@ def db_save_user(username: str, payload: Dict[str, Any]) -> bool:
     return cloud_ok or local_ok
 
 
+def _extract_user_summary(uname: str, payload: Dict[str, Any], updated_at: str) -> Dict[str, str]:
+    prof = payload.get("profile") or {}
+    return {
+        "username": uname,
+        "full_name": str(prof.get("full_name", "") or "—"),
+        "student_year": str(prof.get("student_year", "") or "—"),
+        "university": str(prof.get("university", "") or "—"),
+        "has_api_key": "Có" if clean_api_key(str(payload.get("api_key", ""))) else "Chưa",
+        "vocab_count": str(len(payload.get("vocab_notebook") or [])),
+        "history_count": str(len(payload.get("translation_history") or [])),
+        "login_count": str(payload.get("login_count", 1)),
+        "last_login": str(payload.get("last_login_at") or updated_at)[:19],
+        "created_at": str(payload.get("created_at") or updated_at)[:19],
+    }
+
+
 def db_list_all_users() -> List[Dict[str, str]]:
-    """Dành cho Chế độ Tác giả xem danh sách sinh viên đã đăng ký."""
+    """Dành cho Chế độ Tác giả xem thông tin tài khoản và hoạt động đăng nhập (bảo vệ mật khẩu & API Key)."""
     users: List[Dict[str, str]] = []
     if _is_cloud_sync_enabled():
         try:
-            url = f"{SUPABASE_URL}/rest/v1/am_users?select=username,payload,updated_at&order=updated_at.desc&limit=50"
+            url = f"{SUPABASE_URL}/rest/v1/am_users?select=username,payload,updated_at&order=updated_at.desc&limit=200"
             req = urllib.request.Request(url, headers=_supabase_headers(), method="GET")
             with urllib.request.urlopen(req, timeout=8) as resp:
                 rows = json.loads(resp.read().decode("utf-8"))
                 for r in rows:
-                    p = r.get("payload") if isinstance(r.get("payload"), dict) else {}
-                    prof = p.get("profile") or {}
-                    users.append({
-                        "username": r.get("username", ""),
-                        "full_name": prof.get("full_name", ""),
-                        "student_year": prof.get("student_year", ""),
-                        "university": prof.get("university", ""),
-                        "vocab_count": str(len(p.get("vocab_notebook") or [])),
-                        "time": str(r.get("updated_at", ""))[:19],
-                    })
+                    uname = str(r.get("username", ""))
+                    if not uname or uname.startswith("__dev_"):
+                        continue
+                    payload = r.get("payload")
+                    if isinstance(payload, str):
+                        payload = json.loads(payload)
+                    if isinstance(payload, dict):
+                        users.append(_extract_user_summary(uname, payload, str(r.get("updated_at", ""))))
                 return users
         except Exception:
             pass
@@ -427,21 +441,25 @@ def db_list_all_users() -> List[Dict[str, str]]:
     _init_sqlite_db()
     try:
         with sqlite3.connect(SQLITE_DB_PATH) as conn:
-            rows = conn.execute("SELECT username, payload, updated_at FROM am_users ORDER BY updated_at DESC LIMIT 50").fetchall()
+            rows = conn.execute("SELECT username, payload, updated_at FROM am_users ORDER BY updated_at DESC LIMIT 200").fetchall()
             for uname, raw_p, upd in rows:
-                p = json.loads(raw_p) if raw_p else {}
-                prof = p.get("profile") or {}
-                users.append({
-                    "username": uname,
-                    "full_name": prof.get("full_name", ""),
-                    "student_year": prof.get("student_year", ""),
-                    "university": prof.get("university", ""),
-                    "vocab_count": str(len(p.get("vocab_notebook") or [])),
-                    "time": str(upd)[:19],
-                })
+                if not uname or str(uname).startswith("__dev_"):
+                    continue
+                payload = json.loads(raw_p) if raw_p else {}
+                if isinstance(payload, dict):
+                    users.append(_extract_user_summary(str(uname), payload, str(upd)))
     except Exception:
         pass
     return users
+
+
+def export_users_to_csv(users: List[Dict[str, str]]) -> bytes:
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["Username", "Ho_va_Ten", "Nam_hoc", "Truong", "So_lan_dang_nhap", "Lan_cuoi_dang_nhap", "So_tu_vung", "So_luot_dich", "Da_cai_API_Key"])
+    for u in users:
+        w.writerow([u["username"], u["full_name"], u["student_year"], u["university"], u["login_count"], u["last_login"], u["vocab_count"], u["history_count"], u["has_api_key"]])
+    return ("\ufeff" + out.getvalue()).encode("utf-8")
 
 
 def sync_current_account_to_db() -> None:
@@ -452,6 +470,9 @@ def sync_current_account_to_db() -> None:
     existing = db_get_user(uname) or {}
     payload = {
         "password_hash": existing.get("password_hash", st.session_state.get("auth_password_hash", "")),
+        "created_at": existing.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        "last_login_at": existing.get("last_login_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        "login_count": existing.get("login_count", 1),
         "profile": {
             "full_name": st.session_state.get("confirmed_user_name", ""),
             "student_year": st.session_state.get("confirmed_user_year", "Sinh viên Năm 4"),
@@ -480,6 +501,88 @@ def apply_user_payload_to_session(username: str, payload: Dict[str, Any]) -> Non
         st.query_params["s"] = create_session_token(username)
     except Exception:
         pass
+
+
+def _get_device_remember_key() -> str:
+    """Tạo mã thiết bị riêng (dựa trên IP + User-Agent + Accept-Language) cho tính năng Ghi nhớ đăng nhập."""
+    try:
+        headers = st.context.headers if hasattr(st, "context") and hasattr(st.context, "headers") else {}
+        ua = str(headers.get("User-Agent", ""))
+        lang = str(headers.get("Accept-Language", ""))
+        xff = str(headers.get("X-Forwarded-For", headers.get("X-Real-Ip", "")))
+        ip_part = xff.split(",")[0].strip() if xff else ""
+        if ua or ip_part:
+            h = hashlib.sha256(f"{ip_part}::{ua}::{lang}".encode("utf-8")).hexdigest()[:24]
+            return f"__dev_{h}"
+    except Exception:
+        pass
+    return ""
+
+
+def save_remembered_login(username: str) -> None:
+    """Lưu ghi nhớ đăng nhập bền vững qua đóng tab / tắt trình duyệt (Cookie + localStorage + DB device link)."""
+    tok = create_session_token(username)
+    dev_key = _get_device_remember_key()
+    if dev_key:
+        db_save_user(dev_key, {"remembered_username": username, "token": tok})
+    safe_tok = json.dumps(tok)
+    components.html(
+        f"""
+        <script>
+        try {{
+            const t = {safe_tok};
+            localStorage.setItem("am_remember_token", t);
+            const c = "am_rtok=" + encodeURIComponent(t) + "; path=/; max-age=31536000; SameSite=Lax";
+            try {{ window.parent.document.cookie = c; }} catch (e) {{}}
+            document.cookie = c;
+        }} catch (e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def clear_remembered_login() -> None:
+    """Xóa ghi nhớ đăng nhập trên thiết bị hiện tại (khi đăng xuất hoặc hủy lưu)."""
+    dev_key = _get_device_remember_key()
+    if dev_key:
+        db_save_user(dev_key, {"remembered_username": "", "token": ""})
+    components.html(
+        """
+        <script>
+        try {
+            localStorage.removeItem("am_remember_token");
+            const c = "am_rtok=; path=/; max-age=0; SameSite=Lax";
+            try { window.parent.document.cookie = c; } catch (e) {}
+            document.cookie = c;
+        } catch (e) {}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def bootstrap_remembered_login_js() -> None:
+    """Đọc lại token từ localStorage nếu trình duyệt vừa mở lại từ link gốc sau khi đóng tab."""
+    components.html(
+        """
+        <script>
+        try {
+            const t = localStorage.getItem("am_remember_token");
+            if (t && t.includes(".")) {
+                const url = new URL(window.parent.location.href);
+                const lastTry = parseInt(sessionStorage.getItem("am_rtok_sync_ts") || "0", 10);
+                if (url.searchParams.get("s") !== t && (Date.now() - lastTry > 4000)) {
+                    sessionStorage.setItem("am_rtok_sync_ts", String(Date.now()));
+                    url.searchParams.set("s", t);
+                    window.parent.location.replace(url.toString());
+                }
+            }
+        } catch (e) {}
+        </script>
+        """,
+        height=0,
+    )
 
 
 def send_user_notification_email(full_name: str, student_year: str, university: str) -> Tuple[bool, str]:
@@ -743,6 +846,7 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
 
         div.stButton > button[kind="primary"],
         div.stFormSubmitButton > button[kind="primary"],
+        div[data-testid="stFormSubmitButton"] button,
         div.stDownloadButton > button[kind="primary"] {{
             background-color: {btn_pri_bg} !important;
             color: {btn_pri_fg} !important;
@@ -755,6 +859,7 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
         }}
         div.stButton > button[kind="primary"] *,
         div.stFormSubmitButton > button[kind="primary"] *,
+        div[data-testid="stFormSubmitButton"] button *,
         div.stDownloadButton > button[kind="primary"] * {{
             color: {btn_pri_fg} !important;
         }}
@@ -2129,8 +2234,15 @@ def init_session_state() -> None:
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # TỰ ĐỘNG KHÔI PHỤC TÀI KHOẢN QUA MỌI LẦN F5 BẰNG TOKEN ĐÃ KÝ HMAC TRÊN ?s=...
+    if "ask_remember_login" not in st.session_state:
+        st.session_state["ask_remember_login"] = False
+    if "is_login_remembered" not in st.session_state:
+        st.session_state["is_login_remembered"] = False
+
+    # TỰ ĐỘNG KHÔI PHỤC TÀI KHOẢN KỂ CẢ KHI ĐÓNG TAB MỞ LẠI LINK GỐC (3 LỚP: ?s -> Cookie -> Device DB -> localStorage)
     if not st.session_state["auth_username"]:
+        restored = False
+        # Lớp 1: Từ query param ?s=
         try:
             tok = str(st.query_params.get("s", "")).strip()
             if tok:
@@ -2139,8 +2251,44 @@ def init_session_state() -> None:
                     user_payload = db_get_user(uname)
                     if user_payload:
                         apply_user_payload_to_session(uname, user_payload)
+                        restored = True
         except Exception:
             pass
+
+        # Lớp 2: Từ Cookie trình duyệt (am_rtok) khi mở lại link gốc
+        if not restored:
+            try:
+                if hasattr(st, "context") and hasattr(st.context, "cookies"):
+                    ctok = urllib.parse.unquote(str(st.context.cookies.get("am_rtok", "")).strip())
+                    if ctok:
+                        uname = verify_session_token(ctok)
+                        if uname:
+                            user_payload = db_get_user(uname)
+                            if user_payload:
+                                apply_user_payload_to_session(uname, user_payload)
+                                st.session_state["is_login_remembered"] = True
+                                restored = True
+            except Exception:
+                pass
+
+        # Lớp 3: Từ liên kết thiết bị trên DB (hoạt động ngay cả khi Brave Shields chặn cookie!)
+        if not restored:
+            dev_key = _get_device_remember_key()
+            if dev_key:
+                dev_rec = db_get_user(dev_key)
+                if isinstance(dev_rec, dict) and dev_rec.get("token"):
+                    uname = verify_session_token(str(dev_rec["token"]))
+                    if uname:
+                        user_payload = db_get_user(uname)
+                        if user_payload:
+                            apply_user_payload_to_session(uname, user_payload)
+                            st.session_state["is_login_remembered"] = True
+                            restored = True
+
+        # Lớp 4: Dự phòng đọc localStorage từ trình duyệt
+        if not restored and not st.session_state.get("rtok_js_checked"):
+            st.session_state["rtok_js_checked"] = True
+            bootstrap_remembered_login_js()
 
 
 def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: bool = False) -> None:
@@ -2357,18 +2505,52 @@ def main() -> None:
         # 1. TÀI KHOẢN ĐĂNG NHẬP & ĐỒNG BỘ ĐA THIẾT BỊ
         st.markdown("#### Tài khoản & Đồng bộ")
         sync_badge = "Cloud Supabase (Đa thiết bị)" if _is_cloud_sync_enabled() else "SQLite cục bộ"
+        if st.session_state.get("pending_remember_save"):
+            save_remembered_login(st.session_state.pop("pending_remember_save"))
+        if st.session_state.get("pending_remember_clear"):
+            st.session_state.pop("pending_remember_clear")
+            clear_remembered_login()
+
         if st.session_state["auth_username"]:
             uname = st.session_state["auth_username"]
             sv_name = st.session_state.get("confirmed_user_name") or uname
             sv_uni = st.session_state.get("confirmed_user_uni") or ""
             st.success(f"Đang đăng nhập: **{sv_name}** (`@{uname}`)" + (f" · {sv_uni}" if sv_uni else ""))
-            st.caption(f"Đồng bộ: {sync_badge} · Tự giữ phiên khi F5")
+
+            # Hỏi người dùng có muốn lưu đăng nhập cho các lần mở tab sau không
+            if st.session_state.get("ask_remember_login") and not st.session_state.get("is_login_remembered"):
+                st.info("Bạn có muốn **lưu đăng nhập** trên thiết bị này để các lần sau mở web vào thẳng tài khoản không?")
+                rc1, rc2 = st.columns(2)
+                with rc1:
+                    if st.button("Có, lưu luôn", key="btn_yes_remember", type="primary", use_container_width=True):
+                        st.session_state["is_login_remembered"] = True
+                        st.session_state["ask_remember_login"] = False
+                        st.session_state["pending_remember_save"] = uname
+                        st.toast("Đã lưu đăng nhập! Lần sau mở lại web sẽ tự vào tài khoản này.")
+                        st.rerun()
+                with rc2:
+                    if st.button("Chỉ lần này", key="btn_no_remember", use_container_width=True):
+                        st.session_state["ask_remember_login"] = False
+                        st.rerun()
+            elif st.session_state.get("is_login_remembered"):
+                st.caption(f"Đồng bộ: {sync_badge} · Đã lưu đăng nhập tự động")
+            else:
+                st.caption(f"Đồng bộ: {sync_badge} · Phiên tạm thời")
+                if st.button("Lưu đăng nhập trên thiết bị này", key="btn_save_remember_later", use_container_width=True):
+                    st.session_state["is_login_remembered"] = True
+                    st.session_state["pending_remember_save"] = uname
+                    st.toast("Đã bật tự động đăng nhập cho các lần sau.")
+                    st.rerun()
+
             if st.button("Đăng xuất", use_container_width=True):
                 st.session_state["auth_username"] = ""
                 st.session_state["auth_password_hash"] = ""
                 st.session_state["saved_gemini_api_key"] = ""
                 st.session_state["saved_vocab_notebook"] = []
                 st.session_state["translation_history"] = []
+                st.session_state["is_login_remembered"] = False
+                st.session_state["ask_remember_login"] = False
+                st.session_state["pending_remember_clear"] = True
                 try:
                     if "s" in st.query_params:
                         del st.query_params["s"]
@@ -2385,7 +2567,11 @@ def main() -> None:
                         u_clean = _normalize_username(l_user)
                         record = db_get_user(u_clean)
                         if record and _verify_password(l_pass, record.get("password_hash", "")):
+                            record["login_count"] = int(record.get("login_count", 0)) + 1
+                            record["last_login_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            db_save_user(u_clean, record)
                             apply_user_payload_to_session(u_clean, record)
+                            st.session_state["ask_remember_login"] = True
                             st.toast("Đăng nhập thành công! Đã đồng bộ Key, Sổ từ vựng & Lịch sử.")
                             st.rerun()
                         else:
@@ -2404,8 +2590,12 @@ def main() -> None:
                         elif db_get_user(u_clean) is not None:
                             st.error("Tên đăng nhập này đã tồn tại. Hãy chọn tên khác hoặc chuyển sang Đăng nhập.")
                         else:
+                            now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             new_payload = {
                                 "password_hash": _hash_password(r_pass),
+                                "created_at": now_ts,
+                                "last_login_at": now_ts,
+                                "login_count": 1,
                                 "profile": {
                                     "full_name": r_name.strip(),
                                     "student_year": r_year,
@@ -2419,6 +2609,7 @@ def main() -> None:
                             db_save_user(u_clean, new_payload)
                             send_user_notification_email(r_name.strip(), r_year, r_uni.strip())
                             apply_user_payload_to_session(u_clean, new_payload)
+                            st.session_state["ask_remember_login"] = True
                             st.toast("Tạo tài khoản thành công! Dữ liệu của bạn sẽ tự động lưu.")
                             st.rerun()
             st.caption(f"Lưu trữ: {sync_badge}")
@@ -2467,11 +2658,46 @@ def main() -> None:
                     else:
                         st.error("Mật khẩu không đúng.")
             else:
-                st.caption(f"Trạng thái đồng bộ Cloud: {'Đang bật Supabase' if _is_cloud_sync_enabled() else 'Chưa cấu hình SUPABASE_URL/SUPABASE_KEY trong Secrets'}")
+                st.caption(f"Đồng bộ Cloud: {'Đang bật Supabase' if _is_cloud_sync_enabled() else 'SQLite cục bộ'}")
                 all_users = db_list_all_users()
-                st.caption(f"Tài khoản sinh viên đã đăng ký ({len(all_users)}):")
-                for u in all_users[:15]:
-                    st.caption(f"• **{u['full_name']}** (`@{u['username']}`) · {u['university']} · {u['vocab_count']} từ")
+                st.markdown(f"**Tổng số tài khoản: {len(all_users)}**")
+                if all_users:
+                    st.download_button(
+                        "Tải danh sách sinh viên (.CSV)",
+                        data=export_users_to_csv(all_users),
+                        file_name=f"danh_sach_nguoi_dung_{datetime.now().strftime('%Y-%m-%d')}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
+                    with st.container(height=240):
+                        for u in all_users:
+                            st.markdown(
+                                f"**{u['full_name']}** (`@{u['username']}`)<br/>"
+                                f"<span style='font-size:0.78rem;opacity:0.8;'>"
+                                f"{u['student_year']} · {u['university']}<br/>"
+                                f"Đăng nhập: {u['login_count']} lần · Gần nhất: {u['last_login']}<br/>"
+                                f"Từ vựng: {u['vocab_count']} · Lịch sử: {u['history_count']} · API Key: {u['has_api_key']}"
+                                f"</span>",
+                                unsafe_allow_html=True,
+                            )
+                            st.markdown("<hr style='margin:6px 0;opacity:0.25;'/>", unsafe_allow_html=True)
+
+                with st.form("admin_reset_pwd_form", clear_on_submit=True):
+                    st.caption("Hỗ trợ đặt lại mật khẩu (khi sinh viên quên):")
+                    rp_user = st.text_input("Username cần đặt lại", placeholder="vd: minh_spb")
+                    rp_new = st.text_input("Mật khẩu mới", type="password")
+                    if st.form_submit_button("Đặt lại mật khẩu", use_container_width=True):
+                        u_target = _normalize_username(rp_user)
+                        rec = db_get_user(u_target)
+                        if not rec:
+                            st.error("Không tìm thấy tài khoản này.")
+                        elif len(rp_new) < 4:
+                            st.warning("Mật khẩu mới cần ít nhất 4 ký tự.")
+                        else:
+                            rec["password_hash"] = _hash_password(rp_new)
+                            db_save_user(u_target, rec)
+                            st.success(f"Đã đặt lại mật khẩu cho @{u_target}.")
+
                 if st.button("Khóa lại", use_container_width=True):
                     st.session_state["is_author_admin"] = False
                     st.rerun()
