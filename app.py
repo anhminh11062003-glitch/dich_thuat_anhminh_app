@@ -172,12 +172,17 @@ def get_author_avatar_data_uri() -> str:
     return get_author_monogram_svg_uri()
 
 
-def render_copy_button(text_to_copy: str, label: str = "Sao chép", key_suffix: str = "") -> None:
+def render_copy_button(text_to_copy: str, label: str = "Sao chép", key_suffix: str = "", is_dark: bool = False) -> None:
     if not text_to_copy:
         return
     safe_js_text = json.dumps(text_to_copy, ensure_ascii=False)
     safe_label = esc(label)
     btn_id = f"cp_{hashlib.md5((key_suffix + text_to_copy[:30]).encode('utf-8')).hexdigest()[:10]}"
+    bg = "#18181B" if is_dark else "#FFFFFF"
+    fg = "#FAFAFA" if is_dark else "#18181B"
+    bd = "#3F3F46" if is_dark else "#D4D4D8"
+    done_bg = "#FAFAFA" if is_dark else "#18181B"
+    done_fg = "#0B0B0D" if is_dark else "#FFFFFF"
     components.html(
         f"""
         <!DOCTYPE html>
@@ -185,9 +190,9 @@ def render_copy_button(text_to_copy: str, label: str = "Sao chép", key_suffix: 
         <body style="margin:0;padding:0;background:transparent;overflow:hidden;">
             <button id="{btn_id}" onclick="copyNow()" style="
                 font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-                background: #FFFFFF;
-                color: #18181B;
-                border: 1px solid #D4D4D8;
+                background: {bg};
+                color: {fg};
+                border: 1px solid {bd};
                 border-radius: 8px;
                 padding: 5px 12px;
                 font-size: 13px;
@@ -200,14 +205,14 @@ def render_copy_button(text_to_copy: str, label: str = "Sao chép", key_suffix: 
                 const btn = document.getElementById("{btn_id}");
                 const done = () => {{
                     btn.innerText = "Đã sao chép";
-                    btn.style.background = "#18181B";
-                    btn.style.color = "#FFFFFF";
-                    btn.style.borderColor = "#18181B";
+                    btn.style.background = "{done_bg}";
+                    btn.style.color = "{done_fg}";
+                    btn.style.borderColor = "{done_bg}";
                     setTimeout(() => {{
                         btn.innerText = {json.dumps(label, ensure_ascii=False)};
-                        btn.style.background = "#FFFFFF";
-                        btn.style.color = "#18181B";
-                        btn.style.borderColor = "#D4D4D8";
+                        btn.style.background = "{bg}";
+                        btn.style.color = "{fg}";
+                        btn.style.borderColor = "{bd}";
                     }}, 1500);
                 }};
                 if (navigator.clipboard && navigator.clipboard.writeText) {{
@@ -235,14 +240,9 @@ def render_copy_button(text_to_copy: str, label: str = "Sao chép", key_suffix: 
 
 
 # ==============================================================================
-# 2. LƯU CỐ ĐỊNH KEY & HỒ SƠ SINH VIÊN BỀN VỮNG QUA MỌI LẦN F5 / RESET WEB
-#    (KẾT HỢP 3 LỚP: BROWSER COOKIE + LOCALSTORAGE + VAULT CÁCH LY THEO CLIENT ID)
+# 2. LƯU CỐ ĐỊNH KEY, HỒ SƠ SINH VIÊN & GIAO DIỆN SÁNG/TỐI QUA MỌI LẦN F5
 # ==============================================================================
 def _get_client_vault_id() -> str:
-    """
-    Tạo mã định danh riêng của từng người dùng dựa trên Cookie `am_uid` (nếu có)
-    hoặc hash từ IP + User-Agent + Accept-Language. Tuyệt đối KHÔNG dùng khóa 'default' chung.
-    """
     try:
         if hasattr(st, "context") and hasattr(st.context, "cookies"):
             uid = str(st.context.cookies.get("am_uid", "")).strip()
@@ -290,18 +290,12 @@ def _write_vault_entry(client_id: str, updates: Dict[str, Any]) -> None:
         pass
 
 
-def load_persisted_user_data() -> Tuple[str, Dict[str, str]]:
-    """
-    Đọc API Key và Hồ sơ sinh viên bền vững sau khi F5 / đóng mở lại trình duyệt:
-    Ưu tiên 1: Query params vừa đồng bộ từ localStorage (đọc xong xóa ngay khỏi URL)
-    Ưu tiên 2: Cookie HTTP của chính trình duyệt người dùng (st.context.cookies)
-    Ưu tiên 3: Vault cục bộ cách ly theo client_id riêng
-    """
+def load_persisted_user_data() -> Tuple[str, Dict[str, str], str]:
     api_key = ""
     profile: Dict[str, str] = {}
+    theme = ""
     had_qp = False
 
-    # 1. Đọc từ query params vừa bootstrap (nếu có) rồi xóa ngay khỏi URL
     try:
         qp_k = st.query_params.get("_am_k", "")
         if qp_k:
@@ -318,7 +312,10 @@ def load_persisted_user_data() -> Tuple[str, Dict[str, str]]:
                 "student_year": qp_y if qp_y in STUDENT_YEAR_OPTIONS else "Sinh viên Năm 4",
                 "university": qp_u,
             }
-        for k in ("_am_n", "_am_y", "_am_u", "saved_gkey", "sv_name", "sv_year", "sv_uni"):
+        qp_t = st.query_params.get("_am_t", "").strip()
+        if qp_t in ("light", "dark"):
+            theme = qp_t
+        for k in ("_am_n", "_am_y", "_am_u", "_am_t", "saved_gkey", "sv_name", "sv_year", "sv_uni"):
             if k in st.query_params:
                 del st.query_params[k]
                 had_qp = True
@@ -331,7 +328,7 @@ def load_persisted_user_data() -> Tuple[str, Dict[str, str]]:
             <script>
             try {
                 const url = new URL(window.parent.location.href);
-                ["_am_k", "_am_n", "_am_y", "_am_u", "saved_gkey", "sv_name", "sv_year", "sv_uni"]
+                ["_am_k", "_am_n", "_am_y", "_am_u", "_am_t", "saved_gkey", "sv_name", "sv_year", "sv_uni"]
                     .forEach(p => url.searchParams.delete(p));
                 window.parent.history.replaceState({}, "", url.toString());
             } catch (e) {}
@@ -340,12 +337,13 @@ def load_persisted_user_data() -> Tuple[str, Dict[str, str]]:
             height=0,
         )
 
-    # 2. Đọc trực tiếp từ Cookie trình duyệt (bền vững qua mọi lần F5, không cần reload)
     try:
         if hasattr(st, "context") and hasattr(st.context, "cookies"):
             cookies = st.context.cookies
             if not api_key and cookies.get("am_gkey"):
                 api_key = clean_api_key(urllib.parse.unquote(str(cookies.get("am_gkey"))))
+            if not theme and cookies.get("am_theme") in ("light", "dark"):
+                theme = str(cookies.get("am_theme"))
             if not profile and cookies.get("am_prof"):
                 raw_p = urllib.parse.unquote(str(cookies.get("am_prof")))
                 parsed_p = json.loads(raw_p)
@@ -358,13 +356,14 @@ def load_persisted_user_data() -> Tuple[str, Dict[str, str]]:
     except Exception:
         pass
 
-    # 3. Dự phòng từ Vault riêng theo client_id (không chia sẻ giữa các máy khác nhau)
     cid = _get_client_vault_id()
-    if cid and (not api_key or not profile):
+    if cid and (not api_key or not profile or not theme):
         entry = _read_vault_all().get(cid)
         if isinstance(entry, dict):
             if not api_key and entry.get("api_key"):
                 api_key = clean_api_key(str(entry["api_key"]))
+            if not theme and entry.get("theme") in ("light", "dark"):
+                theme = str(entry["theme"])
             if not profile and isinstance(entry.get("profile"), dict):
                 p = entry["profile"]
                 if p.get("full_name") and p.get("university"):
@@ -374,20 +373,19 @@ def load_persisted_user_data() -> Tuple[str, Dict[str, str]]:
                         "university": str(p["university"]).strip(),
                     }
 
-    return api_key, profile
+    return api_key, profile, (theme or "light")
 
 
 def persist_browser_state(
     action: str,
     api_key: str = "",
     student_profile: Optional[Dict[str, str]] = None,
+    theme_mode: str = "light",
 ) -> None:
-    """
-    Ghi đồng thời vào Cookie (max-age 1 năm), localStorage và Vault riêng của client_id.
-    """
     cid = _get_client_vault_id()
     safe_key = json.dumps(clean_api_key(api_key))
     safe_prof = json.dumps(student_profile or {}, ensure_ascii=False)
+    safe_theme = json.dumps(theme_mode)
 
     if action == "save_key":
         _write_vault_entry(cid, {"api_key": clean_api_key(api_key)})
@@ -397,9 +395,9 @@ def persist_browser_state(
             try {{
                 const k = {safe_key};
                 localStorage.setItem("anhminh_saved_gemini_key", k);
-                const cookieStr = "am_gkey=" + encodeURIComponent(k) + "; path=/; max-age=31536000; SameSite=Lax";
-                try {{ window.parent.document.cookie = cookieStr; }} catch (e) {{}}
-                document.cookie = cookieStr;
+                const c = "am_gkey=" + encodeURIComponent(k) + "; path=/; max-age=31536000; SameSite=Lax";
+                try {{ window.parent.document.cookie = c; }} catch (e) {{}}
+                document.cookie = c;
             }} catch (e) {{}}
             </script>
             """,
@@ -412,9 +410,9 @@ def persist_browser_state(
             <script>
             try {
                 localStorage.removeItem("anhminh_saved_gemini_key");
-                const delCookie = "am_gkey=; path=/; max-age=0; SameSite=Lax";
-                try { window.parent.document.cookie = delCookie; } catch (e) {}
-                document.cookie = delCookie;
+                const c = "am_gkey=; path=/; max-age=0; SameSite=Lax";
+                try { window.parent.document.cookie = c; } catch (e) {}
+                document.cookie = c;
             } catch (e) {}
             </script>
             """,
@@ -428,21 +426,35 @@ def persist_browser_state(
             try {{
                 const pStr = JSON.stringify({safe_prof});
                 localStorage.setItem("anhminh_saved_student_profile", pStr);
-                const cookieStr = "am_prof=" + encodeURIComponent(pStr) + "; path=/; max-age=31536000; SameSite=Lax";
-                try {{ window.parent.document.cookie = cookieStr; }} catch (e) {{}}
-                document.cookie = cookieStr;
+                const c = "am_prof=" + encodeURIComponent(pStr) + "; path=/; max-age=31536000; SameSite=Lax";
+                try {{ window.parent.document.cookie = c; }} catch (e) {{}}
+                document.cookie = c;
+            }} catch (e) {{}}
+            </script>
+            """,
+            height=0,
+        )
+    elif action == "save_theme":
+        _write_vault_entry(cid, {"theme": theme_mode})
+        components.html(
+            f"""
+            <script>
+            try {{
+                const t = {safe_theme};
+                localStorage.setItem("anhminh_theme_mode", t);
+                const c = "am_theme=" + encodeURIComponent(t) + "; path=/; max-age=31536000; SameSite=Lax";
+                try {{ window.parent.document.cookie = c; }} catch (e) {{}}
+                document.cookie = c;
             }} catch (e) {{}}
             </script>
             """,
             height=0,
         )
     elif action == "bootstrap_from_localstorage":
-        # Chạy mỗi khi server session còn trống (kể cả sau F5!) — KHÔNG bị chặn bởi sessionStorage cũ
         components.html(
             """
             <script>
             try {
-                // Đảm bảo luôn có cookie định danh am_uid riêng cho trình duyệt này
                 let hasUid = (document.cookie || "").includes("am_uid=");
                 if (!hasUid) {
                     const randUid = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).replace(/-/g, "");
@@ -475,7 +487,12 @@ def persist_browser_state(
                     }
                 }
 
-                // Chống vòng lặp reload bằng mốc thời gian 4 giây
+                const savedTheme = localStorage.getItem("anhminh_theme_mode");
+                if (savedTheme === "dark" || savedTheme === "light") {
+                    url.searchParams.set("_am_t", savedTheme);
+                    changed = true;
+                }
+
                 const lastSync = parseInt(sessionStorage.getItem("am_last_sync_ts") || "0", 10);
                 if (changed && (Date.now() - lastSync > 4000)) {
                     sessionStorage.setItem("am_last_sync_ts", String(Date.now()));
@@ -656,9 +673,9 @@ RUSSIAN_SLANG_DICT: List[Dict[str, str]] = [
 
 
 # ==============================================================================
-# 4. CSS TỐI GIẢN CHUẨN EDITORIAL (PHONG CÁCH NHATANH.AI · TƯƠNG PHẢN CAO)
+# 4. CSS SÁNG / TỐI TƯƠNG PHẢN TUYỆT ĐỐI (TRẮNG CHỮ ĐEN · ĐEN CHỮ TRẮNG)
 # ==============================================================================
-def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
+def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -> None:
     hide_admin_chrome = ""
     if not is_author_admin:
         hide_admin_chrome = """
@@ -678,6 +695,43 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
         }
         """
 
+    if theme_mode == "dark":
+        c_scheme = "dark"
+        bg_page = "#0B0B0D"
+        bg_surface = "#141417"
+        bg_subtle = "#1C1C21"
+        bg_sidebar = "#111114"
+        text_main = "#FAFAFA"
+        text_sub = "#A1A1AA"
+        text_muted = "#71717A"
+        border_light = "#27272A"
+        border_strong = "#3F3F46"
+        btn_pri_bg = "#FAFAFA"
+        btn_pri_fg = "#0B0B0D"
+        btn_pri_hover = "#E4E4E7"
+        btn_sec_bg = "#18181B"
+        btn_sec_fg = "#FAFAFA"
+        btn_sec_hover = "#27272A"
+        link_color = "#60A5FA"
+    else:
+        c_scheme = "light"
+        bg_page = "#FAF9F6"
+        bg_surface = "#FFFFFF"
+        bg_subtle = "#F4F3EE"
+        bg_sidebar = "#F4F3EE"
+        text_main = "#18181B"
+        text_sub = "#52525B"
+        text_muted = "#71717A"
+        border_light = "#E5E4DF"
+        border_strong = "#D4D4D8"
+        btn_pri_bg = "#18181B"
+        btn_pri_fg = "#FFFFFF"
+        btn_pri_hover = "#27272A"
+        btn_sec_bg = "#FFFFFF"
+        btn_sec_fg = "#18181B"
+        btn_sec_hover = "#F4F3EE"
+        link_color = "#1D4ED8"
+
     render_html(
         f"""
         <style>
@@ -686,12 +740,12 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
         {hide_admin_chrome}
 
         :root {{
-            color-scheme: light !important;
+            color-scheme: {c_scheme} !important;
         }}
 
         html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
-            background-color: #FAF9F6 !important;
-            color: #18181B !important;
+            background-color: {bg_page} !important;
+            color: {text_main} !important;
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
         }}
 
@@ -706,7 +760,7 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
 
         .main .block-container {{
             max-width: 960px !important;
-            padding-top: 1.8rem !important;
+            padding-top: 1.6rem !important;
             padding-bottom: 3rem !important;
         }}
 
@@ -714,92 +768,97 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
         .main div[data-testid="stWidgetLabel"] p,
         .main div[data-testid="stMarkdownContainer"] p,
         .main div[data-testid="stMarkdownContainer"] li {{
-            color: #18181B !important;
+            color: {text_main} !important;
         }}
 
         .main div[data-testid="stCaptionContainer"] p {{
-            color: #52525B !important;
+            color: {text_sub} !important;
             font-size: 0.85rem !important;
         }}
 
+        /* SIDEBAR */
         section[data-testid="stSidebar"] {{
-            background-color: #F4F3EE !important;
-            border-right: 1px solid #E5E4DF !important;
+            background-color: {bg_sidebar} !important;
+            border-right: 1px solid {border_light} !important;
         }}
         section[data-testid="stSidebar"] p,
         section[data-testid="stSidebar"] label,
         section[data-testid="stSidebar"] h1,
         section[data-testid="stSidebar"] h2,
         section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] h4,
         section[data-testid="stSidebar"] span,
         section[data-testid="stSidebar"] li {{
-            color: #18181B !important;
+            color: {text_main} !important;
         }}
         section[data-testid="stSidebar"] a {{
-            color: #1D4ED8 !important;
+            color: {link_color} !important;
         }}
 
+        /* INPUT & TEXTAREA */
         textarea, input[type="text"], input[type="password"] {{
-            background-color: #FFFFFF !important;
-            color: #18181B !important;
-            -webkit-text-fill-color: #18181B !important;
-            caret-color: #18181B !important;
-            border: 1px solid #D4D4D8 !important;
+            background-color: {bg_surface} !important;
+            color: {text_main} !important;
+            -webkit-text-fill-color: {text_main} !important;
+            caret-color: {text_main} !important;
+            border: 1px solid {border_strong} !important;
             border-radius: 10px !important;
             font-size: 0.98rem !important;
             line-height: 1.6 !important;
         }}
         textarea:focus, input[type="text"]:focus, input[type="password"]:focus {{
-            border-color: #18181B !important;
-            box-shadow: 0 0 0 1px #18181B !important;
+            border-color: {text_main} !important;
+            box-shadow: 0 0 0 1px {text_main} !important;
         }}
         textarea::placeholder, input::placeholder {{
-            color: #71717A !important;
-            -webkit-text-fill-color: #71717A !important;
+            color: {text_muted} !important;
+            -webkit-text-fill-color: {text_muted} !important;
             opacity: 1 !important;
         }}
 
         div[data-baseweb="input"], div[data-baseweb="base-input"], div[data-baseweb="textarea"] {{
-            background-color: #FFFFFF !important;
-            border-color: #D4D4D8 !important;
+            background-color: {bg_surface} !important;
+            border-color: {border_strong} !important;
             border-radius: 10px !important;
         }}
 
+        /* SELECTBOX & DROPDOWN */
         div[data-baseweb="select"] > div {{
-            background-color: #FFFFFF !important;
-            border: 1px solid #D4D4D8 !important;
+            background-color: {bg_surface} !important;
+            border: 1px solid {border_strong} !important;
             border-radius: 10px !important;
-            color: #18181B !important;
+            color: {text_main} !important;
         }}
         div[data-baseweb="select"] span,
         div[data-baseweb="select"] div,
         div[data-baseweb="select"] svg {{
-            color: #18181B !important;
-            fill: #18181B !important;
+            color: {text_main} !important;
+            fill: {text_main} !important;
         }}
         div[data-baseweb="popover"] ul,
         div[data-baseweb="menu"],
         ul[data-testid="stSelectboxVirtualDropdown"] {{
-            background-color: #FFFFFF !important;
-            border: 1px solid #D4D4D8 !important;
+            background-color: {bg_surface} !important;
+            border: 1px solid {border_strong} !important;
             border-radius: 10px !important;
         }}
         div[data-baseweb="popover"] li,
         div[data-baseweb="menu"] li {{
-            background-color: #FFFFFF !important;
-            color: #18181B !important;
+            background-color: {bg_surface} !important;
+            color: {text_main} !important;
         }}
         div[data-baseweb="popover"] li:hover,
         div[data-baseweb="menu"] li:hover {{
-            background-color: #F4F3EE !important;
+            background-color: {bg_subtle} !important;
         }}
 
+        /* BUTTONS */
         div.stButton > button[kind="primary"],
         div.stFormSubmitButton > button[kind="primary"],
         div.stDownloadButton > button[kind="primary"] {{
-            background-color: #18181B !important;
-            color: #FFFFFF !important;
-            border: 1px solid #18181B !important;
+            background-color: {btn_pri_bg} !important;
+            color: {btn_pri_fg} !important;
+            border: 1px solid {btn_pri_bg} !important;
             border-radius: 9px !important;
             padding: 0.52rem 1.15rem !important;
             font-weight: 600 !important;
@@ -809,18 +868,18 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
         div.stButton > button[kind="primary"] *,
         div.stFormSubmitButton > button[kind="primary"] *,
         div.stDownloadButton > button[kind="primary"] * {{
-            color: #FFFFFF !important;
+            color: {btn_pri_fg} !important;
         }}
         div.stButton > button[kind="primary"]:hover {{
-            background-color: #27272A !important;
+            background-color: {btn_pri_hover} !important;
         }}
 
         div.stButton > button[kind="secondary"],
         div.stDownloadButton > button[kind="secondary"],
         div.stFormSubmitButton > button[kind="secondary"] {{
-            background-color: #FFFFFF !important;
-            color: #18181B !important;
-            border: 1px solid #D4D4D8 !important;
+            background-color: {btn_sec_bg} !important;
+            color: {btn_sec_fg} !important;
+            border: 1px solid {border_strong} !important;
             border-radius: 9px !important;
             padding: 0.5rem 1.05rem !important;
             font-weight: 500 !important;
@@ -829,16 +888,17 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
         }}
         div.stButton > button[kind="secondary"] *,
         div.stDownloadButton > button[kind="secondary"] * {{
-            color: #18181B !important;
+            color: {btn_sec_fg} !important;
         }}
         div.stButton > button[kind="secondary"]:hover,
         div.stDownloadButton > button[kind="secondary"]:hover {{
-            background-color: #F4F3EE !important;
+            background-color: {btn_sec_hover} !important;
         }}
 
+        /* TABS */
         div[data-testid="stTabs"] div[role="tablist"] {{
             gap: 6px;
-            border-bottom: 1px solid #E5E4DF !important;
+            border-bottom: 1px solid {border_light} !important;
             padding-bottom: 8px;
             flex-wrap: wrap;
         }}
@@ -850,54 +910,55 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             box-shadow: none !important;
         }}
         div[data-testid="stTabs"] button[data-baseweb="tab"] p {{
-            color: #52525B !important;
+            color: {text_sub} !important;
             font-weight: 500 !important;
             font-size: 0.92rem !important;
         }}
         div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {{
-            background-color: #F4F3EE !important;
+            background-color: {bg_subtle} !important;
         }}
         div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {{
-            background-color: #18181B !important;
-            border-color: #18181B !important;
+            background-color: {btn_pri_bg} !important;
+            border-color: {btn_pri_bg} !important;
         }}
         div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] p {{
-            color: #FFFFFF !important;
+            color: {btn_pri_fg} !important;
             font-weight: 600 !important;
         }}
 
+        /* EXPANDER & FILE UPLOADER */
         div[data-testid="stExpander"] {{
-            background-color: #FFFFFF !important;
-            border: 1px solid #E5E4DF !important;
+            background-color: {bg_surface} !important;
+            border: 1px solid {border_light} !important;
             border-radius: 10px !important;
         }}
         div[data-testid="stExpander"] summary,
         div[data-testid="stExpander"] summary p,
         div[data-testid="stExpander"] summary svg {{
-            color: #18181B !important;
-            fill: #18181B !important;
+            color: {text_main} !important;
+            fill: {text_main} !important;
             font-weight: 500 !important;
         }}
         div[data-testid="stFileUploader"] section {{
-            background-color: #FFFFFF !important;
-            border: 1px dashed #D4D4D8 !important;
+            background-color: {bg_surface} !important;
+            border: 1px dashed {border_strong} !important;
             border-radius: 10px !important;
         }}
         div[data-testid="stFileUploader"] section *,
         div[data-testid="stFileUploader"] small {{
-            color: #18181B !important;
+            color: {text_main} !important;
         }}
         div[data-testid="stFileUploader"] button {{
-            background-color: #F4F3EE !important;
-            color: #18181B !important;
-            border: 1px solid #D4D4D8 !important;
+            background-color: {bg_subtle} !important;
+            color: {text_main} !important;
+            border: 1px solid {border_strong} !important;
         }}
 
         /* HEADER + TÁC GIẢ */
         .minimal-header {{
-            padding-bottom: 18px;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #E5E4DF;
+            padding-bottom: 16px;
+            margin-bottom: 18px;
+            border-bottom: 1px solid {border_light};
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -908,85 +969,90 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             font-size: 1.55rem;
             font-weight: 700;
             letter-spacing: -0.025em;
-            color: #18181B;
+            color: {text_main};
             margin: 0;
             line-height: 1.2;
         }}
-        .minimal-sub {{ font-size: 0.88rem; color: #52525B; margin-top: 3px; }}
+        .minimal-sub {{ font-size: 0.88rem; color: {text_sub}; margin-top: 3px; }}
         .author-chip {{
-            display: flex;
-            align-items: center;
-            gap: 11px;
-            background: #FFFFFF;
-            border: 1px solid #E5E4DF;
-            border-radius: 999px;
-            padding: 6px 14px 6px 6px;
+            display: flex; align-items: center; gap: 11px;
+            background: {bg_surface}; border: 1px solid {border_light};
+            border-radius: 999px; padding: 6px 14px 6px 6px;
         }}
         .author-chip-img {{
             width: 40px; height: 40px; border-radius: 50%; object-fit: cover;
-            border: 1px solid #D4D4D8; flex-shrink: 0;
+            border: 1px solid {border_strong}; flex-shrink: 0;
         }}
-        .author-chip-name {{ font-size: 0.86rem; font-weight: 600; color: #18181B; line-height: 1.25; }}
-        .author-chip-role {{ font-size: 0.76rem; color: #52525B; line-height: 1.25; }}
+        .author-chip-name {{ font-size: 0.86rem; font-weight: 600; color: {text_main}; line-height: 1.25; }}
+        .author-chip-role {{ font-size: 0.76rem; color: {text_sub}; line-height: 1.25; }}
 
         .sidebar-author-box {{
             display: flex; align-items: center; gap: 12px;
-            background: #FFFFFF; border: 1px solid #E5E4DF; border-radius: 12px;
+            background: {bg_surface}; border: 1px solid {border_light}; border-radius: 12px;
             padding: 12px; margin-bottom: 14px;
         }}
         .sidebar-author-img {{
             width: 52px; height: 52px; border-radius: 50%; object-fit: cover;
-            border: 1px solid #D4D4D8; flex-shrink: 0;
+            border: 1px solid {border_strong}; flex-shrink: 0;
         }}
 
         .clean-card {{
-            background-color: #FFFFFF;
-            border: 1px solid #E5E4DF;
+            background-color: {bg_surface};
+            border: 1px solid {border_light};
             border-radius: 12px;
             padding: 18px 20px;
             margin-top: 14px;
             margin-bottom: 14px;
         }}
         .clean-label {{
-            font-size: 0.82rem; font-weight: 600; color: #52525B; margin-bottom: 8px;
+            font-size: 0.82rem; font-weight: 600; color: {text_sub}; margin-bottom: 8px;
             display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;
         }}
         .clean-result-text {{
-            font-size: 1.07rem; line-height: 1.72; color: #18181B; font-weight: 500;
+            font-size: 1.07rem; line-height: 1.72; color: {text_main}; font-weight: 500;
             white-space: pre-wrap; word-break: break-word;
         }}
-        .example-row {{ padding: 11px 0; border-bottom: 1px solid #E5E4DF; }}
+        .example-row {{ padding: 11px 0; border-bottom: 1px solid {border_light}; }}
         .example-row:last-child {{ border-bottom: none; padding-bottom: 2px; }}
-        .example-ru {{ font-size: 1.0rem; font-weight: 600; color: #18181B; line-height: 1.5; }}
-        .example-vi {{ font-size: 0.91rem; color: #52525B; margin-top: 3px; line-height: 1.5; }}
+        .example-ru {{ font-size: 1.0rem; font-weight: 600; color: {text_main}; line-height: 1.5; }}
+        .example-vi {{ font-size: 0.91rem; color: {text_sub}; margin-top: 3px; line-height: 1.5; }}
         .example-tag {{
-            display: inline-block; font-size: 0.75rem; font-weight: 500; color: #52525B;
-            background: #F4F3EE; padding: 2px 8px; border-radius: 6px; margin-bottom: 4px;
+            display: inline-block; font-size: 0.75rem; font-weight: 500; color: {text_sub};
+            background: {bg_subtle}; padding: 2px 8px; border-radius: 6px; margin-bottom: 4px;
         }}
+
+        .syn-ant-item {{
+            padding: 7px 0;
+            border-bottom: 1px solid {border_light};
+            font-size: 0.92rem;
+            color: {text_main};
+            line-height: 1.45;
+        }}
+        .syn-ant-item:last-child {{ border-bottom: none; }}
 
         .clean-table {{ width: 100%; border-collapse: collapse; font-size: 0.91rem; margin-top: 6px; }}
         .clean-table th {{
-            text-align: left; padding: 9px 12px; border-bottom: 1px solid #D4D4D8;
-            color: #52525B; font-weight: 600; background-color: #FAF9F6;
+            text-align: left; padding: 9px 12px; border-bottom: 1px solid {border_strong};
+            color: {text_sub}; font-weight: 600; background-color: {bg_subtle};
         }}
         .clean-table td {{
-            padding: 9px 12px; border-bottom: 1px solid #E5E4DF; color: #18181B;
+            padding: 9px 12px; border-bottom: 1px solid {border_light}; color: {text_main};
             vertical-align: top; line-height: 1.5;
         }}
 
         .note-callout {{
-            background-color: #F4F3EE; border-left: 3px solid #18181B; border-radius: 0 8px 8px 0;
-            padding: 12px 16px; margin-top: 12px; font-size: 0.91rem; color: #18181B; line-height: 1.62;
+            background-color: {bg_subtle}; border-left: 3px solid {text_main}; border-radius: 0 8px 8px 0;
+            padding: 12px 16px; margin-top: 12px; font-size: 0.91rem; color: {text_main}; line-height: 1.62;
         }}
 
         .flashcard-minimal {{
-            background-color: #FFFFFF; border: 1px solid #D4D4D8; border-radius: 14px;
+            background-color: {bg_surface}; border: 1px solid {border_strong}; border-radius: 14px;
             padding: 36px 24px; text-align: center; margin: 12px 0;
         }}
-        .flashcard-word {{ font-size: 1.72rem; font-weight: 700; color: #18181B; letter-spacing: -0.02em; }}
+        .flashcard-word {{ font-size: 1.72rem; font-weight: 700; color: {text_main}; letter-spacing: -0.02em; }}
         .flashcard-back {{
-            margin-top: 16px; padding-top: 16px; border-top: 1px solid #E5E4DF;
-            font-size: 1.1rem; font-weight: 600; color: #18181B;
+            margin-top: 16px; padding-top: 16px; border-top: 1px solid {border_light};
+            font-size: 1.1rem; font-weight: 600; color: {text_main};
         }}
 
         @media (max-width: 768px) {{
@@ -1000,15 +1066,9 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
 
 
 # ==============================================================================
-# 5. PHÂN LOẠI ĐẦU VÀO, DÒ MODEL TỰ ĐỘNG (CACHE 1H) & KIỂM SOÁT CHẤT LƯỢNG
+# 5. PHÂN LOẠI ĐẦU VÀO, DÒ MODEL TỰ ĐỘNG & KIỂM SOÁT CHẤT LƯỢNG ĐẦU RA
 # ==============================================================================
 def classify_input_type(text: str) -> str:
-    """
-    Phân loại chính xác đầu vào:
-    - 'word': từ đơn hoặc cụm từ/thuật ngữ ngắn (1-3 từ tiếng Nga hoặc 1-4 từ tiếng Việt, 1 dòng, không dấu kết câu)
-    - 'sentence': 1 câu hoàn chỉnh (<= 25 từ, <= 1 dấu kết câu)
-    - 'paragraph': đoạn văn nhiều câu / nhiều dòng
-    """
     cleaned = text.strip()
     if not cleaned:
         return "word"
@@ -1096,10 +1156,6 @@ def generate_tts_audio(text: str, lang_code: str) -> Optional[bytes]:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def discover_working_gemini_models(api_key: str) -> Tuple[List[str], Optional[str]]:
-    """
-    Dò đúng danh sách model mà API Key này được cấp phép (cache 1 tiếng nên chỉ tốn 1 lần duy nhất).
-    Trả về (danh_sách_model, thông_báo_lỗi_nếu_key_sai).
-    """
     clean_k = clean_api_key(api_key)
     if not clean_k:
         return [], "Chưa có API Key."
@@ -1286,8 +1342,10 @@ def _parse_json_response(raw_text: str) -> Optional[Dict]:
     return json.loads(cleaned)
 
 
-def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dict[str, Any]:
-    """Kiểm soát chất lượng đầu ra: lọc rác nhưng KHÔNG xóa nhầm dữ liệu ngữ pháp hợp lệ."""
+def validate_and_clean_ai_result(
+    parsed: Dict[str, Any], input_kind: str, direction: str = DIRECTION_OPTIONS[0], source_text: str = ""
+) -> Dict[str, Any]:
+    """Kiểm soát chặt chất lượng đầu ra & đảm bảo đúng ngôn ngữ đích (không bao giờ trả tiếng Việt khi dịch Việt → Nga)."""
     if not isinstance(parsed, dict):
         return {}
 
@@ -1297,21 +1355,41 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
             return ""
         return s
 
+    main_t = _valid_str(parsed.get("main_translation"))
+    ru_v = _valid_str(parsed.get("ru_version"))
+    vi_v = _valid_str(parsed.get("vi_version"))
+    en_v = _valid_str(parsed.get("en_version"))
+
+    # BẢO VỆ CHIỀU DỊCH TIẾNG VIỆT → TIẾNG NGA: main_translation bắt buộc phải có chữ Nga (Cyrillic)
+    if direction == DIRECTION_OPTIONS[1]:
+        if not re.search(r"[а-яА-ЯёЁ]", main_t):
+            if re.search(r"[а-яА-ЯёЁ]", ru_v):
+                main_t = ru_v
+            elif source_text.strip():
+                main_t = fast_free_translate(source_text, "vi", "ru")
+                ru_v = main_t
+        if not vi_v:
+            vi_v = source_text.strip()
+    elif direction == DIRECTION_OPTIONS[0]:
+        if re.search(r"[а-яА-ЯёЁ]", main_t) and vi_v and not re.search(r"[а-яА-ЯёЁ]", vi_v):
+            main_t = vi_v
+
     out: Dict[str, Any] = {
         "input_kind": input_kind,
-        "main_translation": _valid_str(parsed.get("main_translation")),
-        "ru_version": _valid_str(parsed.get("ru_version")),
-        "vi_version": _valid_str(parsed.get("vi_version")),
-        "en_version": _valid_str(parsed.get("en_version")),
+        "main_translation": main_t,
+        "ru_version": ru_v,
+        "vi_version": vi_v,
+        "en_version": en_v,
         "context_note": _valid_str(parsed.get("context_note")),
         "morphology": {},
+        "synonyms": [],
+        "antonyms": [],
         "sentence_grammar": [],
         "context_examples": [],
         "slang_explanations": [],
         "vocabulary_table": [],
     }
 
-    # 1. Hình thái học (6 cách / chia động từ) khi tra từ đơn hoặc cụm từ ngắn
     if input_kind == "word" and isinstance(parsed.get("morphology"), dict):
         m = parsed["morphology"]
         clean_m: Dict[str, Any] = {
@@ -1342,7 +1420,16 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
         if clean_m.get("cases_table") or clean_m.get("verb_conjugation") or clean_m.get("usage_note"):
             out["morphology"] = clean_m
 
-    # 2. Giải thích ngữ pháp câu / đoạn
+    # Từ đồng nghĩa & trái nghĩa (có từ tiếng Nga + nghĩa tiếng Việt)
+    for field_name in ("synonyms", "antonyms"):
+        raw_list = parsed.get(field_name)
+        if isinstance(raw_list, list):
+            out[field_name] = [
+                {"ru": _valid_str(it.get("ru")), "vi": _valid_str(it.get("vi"))}
+                for it in raw_list
+                if isinstance(it, dict) and _valid_str(it.get("ru")) and _valid_str(it.get("vi"))
+            ][:5]
+
     if input_kind in ("sentence", "paragraph") and isinstance(parsed.get("sentence_grammar"), list):
         out["sentence_grammar"] = [
             {
@@ -1354,7 +1441,6 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
             if isinstance(g, dict) and _valid_str(g.get("segment")) and _valid_str(g.get("explanation"))
         ][:8]
 
-    # 3. Ví dụ áp dụng theo ngữ cảnh
     if isinstance(parsed.get("context_examples"), list):
         out["context_examples"] = [
             {
@@ -1366,7 +1452,6 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
             if isinstance(ex, dict) and _valid_str(ex.get("ru")) and _valid_str(ex.get("vi"))
         ][:4]
 
-    # 4. Tiếng lóng
     if isinstance(parsed.get("slang_explanations"), list):
         out["slang_explanations"] = [
             {
@@ -1378,7 +1463,6 @@ def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dic
             if isinstance(s, dict) and _valid_str(s.get("term")) and _valid_str(s.get("meaning_vi"))
         ]
 
-    # 5. Bảng từ vựng
     if isinstance(parsed.get("vocabulary_table"), list):
         out["vocabulary_table"] = [
             {
@@ -1405,45 +1489,64 @@ def call_gemini_smart_translate(
         ai_cache.move_to_end(cache_key)
         return ai_cache[cache_key], None, 0.01, "Cache"
 
+    if direction == DIRECTION_OPTIONS[1]:
+        dir_rule = (
+            "CHIỀU DỊCH BẮT BUỘC: TIẾNG VIỆT → TIẾNG NGA.\n"
+            "- `main_translation` BẮT BUỘC PHẢI LÀ TIẾNG NGA (chữ cái Cyrillic, có dấu trọng âm \\u0301 nếu là từ đơn). TUYỆT ĐỐI KHÔNG lặp lại tiếng Việt vào `main_translation`!\n"
+            "- `ru_version` là bản tiếng Nga; `vi_version` là bản tiếng Việt gốc; `en_version` là tiếng Anh."
+        )
+    elif direction == DIRECTION_OPTIONS[0]:
+        dir_rule = (
+            "CHIỀU DỊCH BẮT BUỘC: TIẾNG NGA → TIẾNG VIỆT.\n"
+            "- `main_translation` BẮT BUỘC PHẢI LÀ TIẾNG VIỆT chuẩn xác, tự nhiên.\n"
+            "- `ru_version` là tiếng Nga gốc; `vi_version` là tiếng Việt; `en_version` là tiếng Anh."
+        )
+    else:
+        dir_rule = (
+            "CHIỀU DỊCH: ĐỐI CHIẾU 3 NGÔN NGỮ (NGA · VIỆT · ANH).\n"
+            "- `main_translation` trình bày ngắn gọn bản dịch chính; điền đầy đủ `ru_version`, `vi_version`, `en_version`."
+        )
+
     if input_kind == "word":
         task_instruction = """
-Đầu vào là TỪ ĐƠN hoặc CỤM TỪ NGẮN (dù người dùng nhập tiếng Nga hay tiếng Việt, luôn phân tích hình thái của TỪ TIẾNG NGA tương ứng!).
-BẮT BUỘC thực hiện chính xác:
+Đầu vào là TỪ ĐƠN hoặc CỤM TỪ NGẮN (luôn phân tích hình thái của TỪ TIẾNG NGA tương ứng!):
 1. Xác định đúng từ loại tiếng Nga (Danh từ / Tính từ / Đại từ / Động từ / Trạng từ).
-2. Nếu là ĐỘNG TỪ: BẮT BUỘC điền đủ bảng `verb_conjugation` (я, ты, он / она / оно, мы, вы, они, Quá khứ, Mệnh lệnh) và ghi rõ cặp thể НСВ / СВ vào `aspect_or_gender`. Để `cases_table` = [].
-3. Nếu là DANH TỪ / TÍNH TỪ / ĐẠI TỪ / CỤM DANH TỪ: BẮT BUỘC điền CHÍNH XÁC ĐỦ 6 CÁCH vào `cases_table`:
-   1. Именительный (Cách 1), 2. Родительный (Cách 2), 3. Дательный (Cách 3), 4. Винительный (Cách 4), 5. Творительный (Cách 5), 6. Предложный (Cách 6) — có dấu trọng âm \\u0301, đủ số ít `singular` và số nhiều `plural` (nếu từ không có số nhiều thì ghi "—"). Để `verb_conjugation` = {}.
-4. Nếu là TRẠNG TỪ / TỪ KHÔNG BIẾN CÁCH: để `cases_table` = [], `verb_conjugation` = {}, giải thích chi tiết cách dùng & cấp so sánh vào `usage_note`.
-5. BẮT BUỘC tạo đúng 3 ví dụ áp dụng thực tế (`context_examples`) chứa CHÍNH từ tiếng Nga này trong ngữ cảnh tự nhiên (đại học, đời sống hoặc chuyên ngành), có dấu trọng âm \\u0301 và nghĩa tiếng Việt.
-6. Đặt `sentence_grammar` = [].
+2. Nếu là ĐỘNG TỪ: BẮT BUỘC điền đủ `verb_conjugation` (я, ты, он / она / оно, мы, вы, они, Quá khứ, Mệnh lệnh) và ghi rõ cặp thể НСВ / СВ vào `aspect_or_gender`. Đặt `cases_table` = [].
+3. Nếu là DANH TỪ / TÍNH TỪ / ĐẠI TỪ / CỤM DANH TỪ: BẮT BUỘC điền ĐỦ 6 CÁCH vào `cases_table` (1. Именительный -> 6. Предложный, có dấu trọng âm \\u0301, cả `singular` và `plural`; nếu không có số nhiều ghi "—"). Đặt `verb_conjugation` = {}.
+4. Nếu là TRẠNG TỪ / TỪ KHÔNG BIẾN CÁCH: để `cases_table` = [], `verb_conjugation` = {}, giải thích cách dùng & cấp so sánh vào `usage_note`.
+5. BẮT BUỘC điền `synonyms` (2–4 từ đồng nghĩa tiếng Nga có dấu trọng âm \\u0301 + nghĩa Việt) và `antonyms` (1–3 từ trái nghĩa tiếng Nga có dấu trọng âm \\u0301 + nghĩa Việt, nếu từ có trái nghĩa thực tế; nếu không có thì để `[]`).
+6. BẮT BUỘC tạo 3 ví dụ áp dụng thực tế (`context_examples`) chứa CHÍNH từ tiếng Nga này, có dấu trọng âm \\u0301 và dịch tiếng Việt.
+7. Đặt `sentence_grammar` = [].
 """
     elif input_kind == "sentence":
         task_instruction = """
-Đầu vào là MỘT CÂU HOÀN CHỈNH. BẮT BUỘC thực hiện chính xác:
+Đầu vào là MỘT CÂU HOÀN CHỈNH:
 1. Đặt `morphology` = {}.
-2. BẮT BUỘC điền `sentence_grammar` (3–6 mục) phân tích chính xác ngữ pháp của câu tiếng Nga: từ/cụm nào chia Cách mấy, tại sao, động từ thể НСВ/СВ nào & thì gì.
-3. BẮT BUỘC tạo 2–3 ví dụ áp dụng (`context_examples`) dùng lại cấu trúc hoặc từ khóa chính của câu vào tình huống thực tế.
-4. Điền `vocabulary_table` 3–6 từ khóa quan trọng (có dấu trọng âm \\u0301).
+2. BẮT BUỘC điền `sentence_grammar` (3–6 mục) phân tích ngữ pháp tiếng Nga (cách mấy, tại sao, thể động từ НСВ/СВ).
+3. BẮT BUỘC tạo 2–3 ví dụ áp dụng (`context_examples`) dùng lại cấu trúc hoặc từ khóa chính của câu.
+4. Điền `synonyms` / `antonyms` (1–3 cặp) cho từ khóa quan trọng nhất trong câu nếu hữu ích (nếu không cần thì để `[]`).
+5. Điền `vocabulary_table` 3–6 từ khóa quan trọng (có dấu trọng âm \\u0301).
 """
     else:
         task_instruction = """
-Đầu vào là ĐOẠN VĂN DÀI. BẮT BUỘC thực hiện chính xác:
-1. Dịch toàn bộ đoạn văn chuẩn xác, giữ nguyên bố cục xuống dòng.
+Đầu vào là ĐOẠN VĂN DÀI:
+1. Dịch toàn bộ đoạn văn chuẩn xác, giữ đúng bố cục xuống dòng.
 2. Đặt `morphology` = {}.
-3. Điền `sentence_grammar` 3–5 điểm ngữ pháp / cấu trúc đáng chú ý nhất trong đoạn.
+3. Điền `sentence_grammar` 3–5 điểm ngữ pháp nổi bật trong đoạn.
 4. Điền `vocabulary_table` 5–8 thuật ngữ trọng tâm (có dấu trọng âm \\u0301).
-5. BẮT BUỘC tạo 2 ví dụ áp dụng (`context_examples`) cho các thuật ngữ/cấu trúc nổi bật nhất trong đoạn.
+5. BẮT BUỘC tạo 2 ví dụ áp dụng (`context_examples`) cho thuật ngữ/cấu trúc hay nhất trong đoạn.
 """
 
     system_prompt = f"""
-Bạn là giáo sư ngôn ngữ học Nga – Việt chuyên sâu về thuật ngữ đại học và dịch thuật song ngữ Nga-Việt. Chiều dịch: "{direction}".
+Bạn là giáo sư ngôn ngữ học Nga – Việt chuyên sâu dịch thuật và thuật ngữ đại học.
+{dir_rule}
 {task_instruction}
 CHỈ TRẢ VỀ đúng 1 JSON hợp lệ:
 {{
-  "main_translation": "Bản dịch chuẩn xác nhất",
-  "ru_version": "Bản tiếng Nga tương ứng",
-  "vi_version": "Bản tiếng Việt tương ứng",
-  "en_version": "Bản tiếng Anh đối chiếu",
+  "main_translation": "",
+  "ru_version": "",
+  "vi_version": "",
+  "en_version": "",
   "morphology": {{
     "word_type": "",
     "lemma": "",
@@ -1452,6 +1555,8 @@ CHỈ TRẢ VỀ đúng 1 JSON hợp lệ:
     "verb_conjugation": {{"я": "", "ты": "", "он / она / оно": "", "мы": "", "вы": "", "они": "", "Quá khứ": "", "Mệnh lệnh": ""}},
     "usage_note": ""
   }},
+  "synonyms": [{{"ru": "Từ đồng nghĩa tiếng Nga có trọng âm \\u0301", "vi": "Nghĩa tiếng Việt"}}],
+  "antonyms": [{{"ru": "Từ trái nghĩa tiếng Nga có trọng âm \\u0301", "vi": "Nghĩa tiếng Việt"}}],
   "sentence_grammar": [{{"segment": "", "grammar_tag": "", "explanation": ""}}],
   "context_examples": [{{"context": "Ngữ cảnh ngắn", "ru": "Câu tiếng Nga có dấu trọng âm \\u0301", "vi": "Nghĩa tiếng Việt"}}],
   "slang_explanations": [{{"term": "", "full_form": "", "meaning_vi": ""}}],
@@ -1471,7 +1576,7 @@ CHỈ TRẢ VỀ đúng 1 JSON hợp lệ:
 
     try:
         parsed = _parse_json_response(raw_text)
-        cleaned = validate_and_clean_ai_result(parsed or {}, input_kind)
+        cleaned = validate_and_clean_ai_result(parsed or {}, input_kind, direction=direction, source_text=source_text)
         if not cleaned.get("main_translation"):
             return None, "Gemini trả về JSON không có bản dịch.", elapsed, model_used
         ai_cache[cache_key] = cleaned
@@ -1573,16 +1678,18 @@ def fallback_fast_translate(source_text: str, direction: str) -> Dict[str, Any]:
         "vi_version": vi_ver,
         "en_version": en_ver,
         "morphology": {},
+        "synonyms": [],
+        "antonyms": [],
         "sentence_grammar": [],
         "context_examples": examples,
         "slang_explanations": slang_explanations,
         "vocabulary_table": vocab_list,
-        "context_note": "Nhập Gemini API Key (miễn phí) ở thanh bên trái để bật chia 6 cách, chia động từ theo ngôi, phân tích ngữ pháp câu dài và ví dụ áp dụng.",
+        "context_note": "Nhập Gemini API Key (miễn phí) ở thanh bên trái để bật chia 6 cách, chia động từ, từ đồng nghĩa/trái nghĩa, phân tích ngữ pháp câu dài và ví dụ áp dụng.",
     }
 
 
 # ==============================================================================
-# 6. CẨM NANG KIẾN THỨC TIẾNG NGA CHI TIẾT & KHOA HỌC (TAB 3)
+# 6. CẨM NANG KIẾN THỨC TIẾNG NGA CHI TIẾT (7 CHUYÊN ĐỀ · TAB 3)
 # ==============================================================================
 def render_russian_knowledge_hub() -> None:
     topic = st.radio(
@@ -1964,14 +2071,14 @@ def render_vocab_and_practice_tab() -> None:
         status_tag = " · Đã thuộc" if card.get("mastered") else ""
 
         back_html = (
-            f'<div class="flashcard-back">{esc(card["vi"])}<div style="font-size:0.9rem;color:#52525B;font-weight:400;margin-top:4px;">{esc(card.get("en",""))}</div></div>'
+            f'<div class="flashcard-back">{esc(card["vi"])}<div style="font-size:0.9rem;opacity:0.75;font-weight:400;margin-top:4px;">{esc(card.get("en",""))}</div></div>'
             if st.session_state["flashcard_show_back"]
-            else '<div style="margin-top:12px;font-size:0.86rem;color:#71717A;">Bấm «Lật thẻ» để kiểm tra nghĩa</div>'
+            else '<div style="margin-top:12px;font-size:0.86rem;opacity:0.7;">Bấm «Lật thẻ» để kiểm tra nghĩa</div>'
         )
         render_html(
             f"""
             <div class="flashcard-minimal">
-                <div style="font-size:0.8rem;color:#71717A;margin-bottom:8px;">Thẻ {idx + 1} / {len(active_deck)}{status_tag}</div>
+                <div style="font-size:0.8rem;opacity:0.7;margin-bottom:8px;">Thẻ {idx + 1} / {len(active_deck)}{status_tag}</div>
                 <div class="flashcard-word">{esc(card["ru_accent"])}</div>
                 {back_html}
             </div>
@@ -2031,8 +2138,8 @@ def render_vocab_and_practice_tab() -> None:
             render_html(
                 f"""
                 <div class="clean-card" style="text-align:center;padding:24px;">
-                    <div style="font-size:0.82rem;color:#71717A;margin-bottom:6px;">Chọn nghĩa tiếng Việt đúng của từ sau:</div>
-                    <div style="font-size:1.6rem;font-weight:700;color:#18181B;">{esc(q['prompt_ru'])}</div>
+                    <div style="font-size:0.82rem;opacity:0.7;margin-bottom:6px;">Chọn nghĩa tiếng Việt đúng của từ sau:</div>
+                    <div style="font-size:1.6rem;font-weight:700;">{esc(q['prompt_ru'])}</div>
                 </div>
                 """
             )
@@ -2082,7 +2189,7 @@ def render_vocab_and_practice_tab() -> None:
                 )
                 render_html(
                     f"""
-                    <div style="max-height:360px;overflow-y:auto;border:1px solid #E5E4DF;border-radius:10px;background:#FFFFFF;margin-top:8px;">
+                    <div class="clean-card" style="padding:0;max-height:360px;overflow-y:auto;">
                         <table class="clean-table" style="margin-top:0;">
                             <thead><tr><th>Tiếng Nga</th><th>Nghĩa tiếng Việt</th><th>Trạng thái</th></tr></thead>
                             <tbody>{rows}</tbody>
@@ -2107,12 +2214,12 @@ def render_vocab_and_practice_tab() -> None:
                 or q_slang.lower() in x["full"].lower()
             ]
             rows = "".join(
-                f"<tr><td><b>{esc(x['accent'])}</b><br/><span style='font-size:0.8rem;color:#71717A;'>{esc(x['full'])}</span></td><td>{esc(x['vi'])}</td></tr>"
+                f"<tr><td><b>{esc(x['accent'])}</b><br/><span style='font-size:0.8rem;opacity:0.7;'>{esc(x['full'])}</span></td><td>{esc(x['vi'])}</td></tr>"
                 for x in filtered
             )
             render_html(
                 f"""
-                <div style="max-height:420px;overflow-y:auto;border:1px solid #E5E4DF;border-radius:10px;background:#FFFFFF;">
+                <div class="clean-card" style="padding:0;max-height:420px;overflow-y:auto;">
                     <table class="clean-table" style="margin-top:0;">
                         <thead><tr><th>Tiếng Nga</th><th>Nghĩa tiếng Việt</th></tr></thead>
                         <tbody>{rows}</tbody>
@@ -2123,7 +2230,7 @@ def render_vocab_and_practice_tab() -> None:
 
 
 # ==============================================================================
-# 8. HIỂN THỊ KẾT QUẢ DỊCH & KHỞI TẠO SESSION BỀN VỮNG
+# 8. HIỂN THỊ KẾT QUẢ DỊCH (GỒM ĐỒNG NGHĨA / TRÁI NGHĨA) & KHỞI TẠO SESSION
 # ==============================================================================
 def init_session_state() -> None:
     defaults: Dict[str, Any] = {
@@ -2131,6 +2238,7 @@ def init_session_state() -> None:
         "selected_direction": DIRECTION_OPTIONS[0],
         "is_author_admin": False,
         "saved_gemini_api_key": "",
+        "theme_mode": "light",
         "declined_keys": set(),
         "translation_history": [],
         "saved_vocab_notebook": [],
@@ -2145,23 +2253,24 @@ def init_session_state() -> None:
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # Nạp bền vững từ Query Bootstrap -> Browser Cookie -> Client Vault
-    rec_key, rec_prof = load_persisted_user_data()
+    rec_key, rec_prof, rec_theme = load_persisted_user_data()
     if rec_key and not st.session_state["saved_gemini_api_key"]:
         st.session_state["saved_gemini_api_key"] = rec_key
     if rec_prof and not st.session_state.get("confirmed_user_name"):
         st.session_state["confirmed_user_name"] = rec_prof["full_name"]
         st.session_state["confirmed_user_year"] = rec_prof["student_year"]
         st.session_state["confirmed_user_uni"] = rec_prof["university"]
+    if not st.session_state.get("theme_initialized"):
+        st.session_state["theme_initialized"] = True
+        st.session_state["theme_mode"] = rec_theme
 
-    # Nếu vẫn thiếu key hoặc profile sau khi F5 -> đồng bộ từ localStorage của trình duyệt (chỉ 1 lần / session mới)
     if not st.session_state.get("ls_bootstrapped_this_session"):
         st.session_state["ls_bootstrapped_this_session"] = True
         if not st.session_state.get("saved_gemini_api_key") or not st.session_state.get("confirmed_user_name"):
             persist_browser_state("bootstrap_from_localstorage")
 
 
-def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
+def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: bool = False) -> None:
     kind_labels = {"word": "Tra từ", "sentence": "Phân tích câu", "paragraph": "Dịch đoạn văn"}
     kind_text = kind_labels.get(res.get("input_kind", ""), "Bản dịch")
     main_trans = res.get("main_translation", "")
@@ -2180,14 +2289,15 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
 
     c_act1, c_act2, _ = st.columns([1.2, 1.3, 4.5])
     with c_act1:
-        render_copy_button(main_trans, "Sao chép", "main_cp")
+        render_copy_button(main_trans, "Sao chép", "main_cp", is_dark=is_dark)
     with c_act2:
         tts_lang = "ru" if re.search(r"[а-яА-ЯёЁ]", main_trans) else "vi"
         if st.button("Nghe bản dịch", key="tts_main_btn", use_container_width=True):
-            audio_b = generate_tts_audio(main_trans, tts_lang)
+            audio_b = generate_tts_audio(main_trans.replace("\u0301", ""), tts_lang)
             if audio_b:
                 st.audio(audio_b, format="audio/mp3")
 
+    # 1. CHIA 6 CÁCH HOẶC CHIA ĐỘNG TỪ
     morph = res.get("morphology") or {}
     cases_table = morph.get("cases_table") or []
     verb_conj = morph.get("verb_conjugation") or {}
@@ -2238,6 +2348,41 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
         if usage_note:
             render_html(f'<div class="note-callout"><b>Cách dùng ({esc(meta_line)}):</b> {esc(usage_note)}</div>')
 
+    # 2. TỪ ĐỒNG NGHĨA & TRÁI NGHĨA (СИНОНИМЫ / АНТОНИМЫ)
+    synonyms = res.get("synonyms") or []
+    antonyms = res.get("antonyms") or []
+    if synonyms or antonyms:
+        sa_c1, sa_c2 = st.columns(2)
+        with sa_c1:
+            if synonyms:
+                s_items = "".join(
+                    f"<div class='syn-ant-item'><b>{esc(s['ru'])}</b> — {esc(s['vi'])}</div>"
+                    for s in synonyms
+                )
+                render_html(
+                    f"""
+                    <div class="clean-card" style="margin-top:8px;">
+                        <div class="clean-label"><span>Từ đồng nghĩa (Синонимы)</span></div>
+                        {s_items}
+                    </div>
+                    """
+                )
+        with sa_c2:
+            if antonyms:
+                a_items = "".join(
+                    f"<div class='syn-ant-item'><b>{esc(a['ru'])}</b> — {esc(a['vi'])}</div>"
+                    for a in antonyms
+                )
+                render_html(
+                    f"""
+                    <div class="clean-card" style="margin-top:8px;">
+                        <div class="clean-label"><span>Từ trái nghĩa (Антонимы)</span></div>
+                        {a_items}
+                    </div>
+                    """
+                )
+
+    # 3. GIẢI THÍCH NGỮ PHÁP TRONG CÂU / ĐOẠN
     sent_grammar = res.get("sentence_grammar") or []
     if sent_grammar:
         g_rows = "".join(
@@ -2256,6 +2401,7 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
             """
         )
 
+    # 4. VÍ DỤ ÁP DỤNG THEO NGỮ CẢNH
     examples = res.get("context_examples") or []
     if examples:
         ex_html = "".join(
@@ -2340,11 +2486,12 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
 
 
 # ==============================================================================
-# 9. GIAO DIỆN CHÍNH (SIDEBAR + HEADER TÁC GIẢ + 3 TAB TINH GỌN)
+# 9. GIAO DIỆN CHÍNH (SIDEBAR + HEADER TÁC GIẢ + CHUYỂN NỀN SÁNG/TỐI + 3 TAB)
 # ==============================================================================
 def main() -> None:
     init_session_state()
-    inject_editorial_minimal_css(is_author_admin=st.session_state["is_author_admin"])
+    is_dark = st.session_state["theme_mode"] == "dark"
+    inject_theme_css(is_author_admin=st.session_state["is_author_admin"], theme_mode=st.session_state["theme_mode"])
     avatar_uri = get_author_avatar_data_uri()
 
     with st.sidebar:
@@ -2353,8 +2500,8 @@ def main() -> None:
             <div class="sidebar-author-box">
                 <img src="{avatar_uri}" class="sidebar-author-img" alt="Mai Văn Minh" />
                 <div>
-                    <div style="font-size:0.95rem;font-weight:700;color:#18181B;">Mai Văn Minh</div>
-                    <div style="font-size:0.79rem;color:#52525B;line-height:1.35;">
+                    <div style="font-size:0.95rem;font-weight:700;">Mai Văn Minh</div>
+                    <div style="font-size:0.79rem;opacity:0.75;line-height:1.35;">
                         Sinh viên năm 4 · Đóng tàu<br/>
                         СПбГМТУ (Xanh-Petecbua)
                     </div>
@@ -2363,17 +2510,28 @@ def main() -> None:
             """
         )
 
-        # Thực thi ghi cookie/localStorage sau khi rerun ổn định
+        # Ghi bền vững vào Cookie/localStorage sau rerun
         if st.session_state.get("pending_key_save"):
-            k_save = st.session_state.pop("pending_key_save")
-            persist_browser_state("save_key", api_key=k_save)
+            persist_browser_state("save_key", api_key=st.session_state.pop("pending_key_save"))
         if st.session_state.get("pending_key_delete"):
             st.session_state.pop("pending_key_delete")
             persist_browser_state("delete_key")
         if st.session_state.get("pending_profile_save"):
-            prof = st.session_state.pop("pending_profile_save")
-            persist_browser_state("save_profile", student_profile=prof)
+            persist_browser_state("save_profile", student_profile=st.session_state.pop("pending_profile_save"))
+        if st.session_state.get("pending_theme_save"):
+            persist_browser_state("save_theme", theme_mode=st.session_state.pop("pending_theme_save"))
 
+        # CHỌN NỀN SÁNG / TỐI TRONG SIDEBAR
+        st.markdown("#### Giao diện")
+        theme_label = "Nền tối (Chữ trắng)" if is_dark else "Nền sáng (Chữ đen)"
+        if st.button(f"Đổi sang {'Nền sáng' if is_dark else 'Nền tối'}", key="sb_theme_toggle", use_container_width=True):
+            new_mode = "light" if is_dark else "dark"
+            st.session_state["theme_mode"] = new_mode
+            st.session_state["pending_theme_save"] = new_mode
+            st.rerun()
+        st.caption(f"Đang dùng: {theme_label}")
+
+        st.markdown("---")
         st.markdown("#### Cài đặt API")
         saved_key_val = clean_api_key(st.session_state.get("saved_gemini_api_key", ""))
         gemini_api_key = st.text_input(
@@ -2385,7 +2543,6 @@ def main() -> None:
         st.markdown(f"[Lấy Gemini API Key miễn phí →]({GEMINI_API_KEY_URL})")
 
         clean_key_input = clean_api_key(gemini_api_key)
-        # Tự động lưu ngay khi người dùng dán Key hợp lệ mới (chỉ cần nhập 1 lần duy nhất!)
         if clean_key_input and clean_key_input != saved_key_val and len(clean_key_input) >= 20:
             st.session_state["saved_gemini_api_key"] = clean_key_input
             st.session_state["pending_key_save"] = clean_key_input
@@ -2455,29 +2612,37 @@ def main() -> None:
                     st.session_state["is_author_admin"] = False
                     st.rerun()
 
-    render_html(
-        f"""
-        <div class="minimal-header">
-            <div>
-                <h1 class="minimal-title">Anh Minh Translate</h1>
-                <div class="minimal-sub">Dịch nhanh Nga – Việt, chia 6 cách, ngữ pháp &amp; ôn tập từ vựng cho sinh viên tại Nga</div>
-            </div>
-            <div class="author-chip">
-                <img src="{avatar_uri}" class="author-chip-img" alt="Mai Văn Minh" />
+    # HEADER + NÚT BẬT/TẮT NỀN SÁNG/TỐI NHANH NGAY TRÊN ĐẦU TRANG
+    hdr_c1, hdr_c2 = st.columns([5.2, 1.1])
+    with hdr_c1:
+        render_html(
+            f"""
+            <div class="minimal-header" style="margin-bottom:8px;">
                 <div>
-                    <div class="author-chip-name">Mai Văn Minh</div>
-                    <div class="author-chip-role">SV năm 4 · Đóng tàu · СПбГМТУ</div>
+                    <h1 class="minimal-title">Anh Minh Translate</h1>
+                    <div class="minimal-sub">Dịch nhanh Nga – Việt, chia 6 cách, đồng nghĩa/trái nghĩa &amp; ôn tập từ vựng</div>
+                </div>
+                <div class="author-chip">
+                    <img src="{avatar_uri}" class="author-chip-img" alt="Mai Văn Minh" />
+                    <div>
+                        <div class="author-chip-name">Mai Văn Minh</div>
+                        <div class="author-chip-role">SV năm 4 · Đóng tàu · СПбГМТУ</div>
+                    </div>
                 </div>
             </div>
-        </div>
-        """
-    )
+            """
+        )
+    with hdr_c2:
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        toggle_txt = "☀ Nền sáng" if is_dark else "☾ Nền tối"
+        if st.button(toggle_txt, key="top_theme_toggle", use_container_width=True):
+            new_mode = "light" if is_dark else "dark"
+            st.session_state["theme_mode"] = new_mode
+            st.session_state["pending_theme_save"] = new_mode
+            st.rerun()
 
     tab1, tab2, tab3 = st.tabs(["Dịch & Ngữ pháp", "Từ vựng & Ôn tập", "Kiến thức tiếng Nga"])
 
-    # ==========================================================================
-    # TAB 1: DỊCH SIÊU TỐC, 6 CÁCH, CHIA ĐỘNG TỪ & VÍ DỤ ÁP DỤNG (ĐÃ BỎ ẢNH SLIDE)
-    # ==========================================================================
     with tab1:
         dir_c1, dir_c2 = st.columns([5, 1])
         with dir_c1:
@@ -2500,7 +2665,7 @@ def main() -> None:
             key="input_text_area",
             height=145,
             label_visibility="collapsed",
-            placeholder="Nhập 1 từ tiếng Nga (hoặc tiếng Việt) để chia 6 cách / chia động từ, hoặc dán câu / đoạn văn để dịch, giải thích ngữ pháp và xem ví dụ áp dụng...",
+            placeholder="Nhập 1 từ (Nga hoặc Việt) để chia 6 cách, chia động từ, tìm từ đồng/trái nghĩa, hoặc dán câu / đoạn văn để dịch & phân tích ngữ pháp...",
         )
 
         b1, b2, b3, b4 = st.columns([1.8, 1.4, 1.0, 2.8])
@@ -2540,23 +2705,30 @@ def main() -> None:
             if not source_text.strip():
                 st.warning("Vui lòng nhập từ, câu hoặc đoạn văn cần dịch.")
             else:
+                # Tự động đảo chiều thông minh nếu đang để Nga → Việt mà người dùng gõ thuần tiếng Việt
+                effective_dir = direction
+                has_cyr = bool(re.search(r"[а-яА-ЯёЁ]", source_text))
+                has_vi_diacritics = bool(re.search(r"[ăâđêôơưàáảãạèéẻẽẹìíỉĩịòóỏõọùúủũụỳýỷỹỵ]", source_text.lower()))
+                if direction == DIRECTION_OPTIONS[0] and not has_cyr and has_vi_diacritics:
+                    effective_dir = DIRECTION_OPTIONS[1]
+                    st.info("Phát hiện bạn đang nhập tiếng Việt — hệ thống tự động dịch sang Tiếng Nga.")
+
                 result_data: Optional[Dict] = None
                 meta_badge = "Dịch nhanh"
                 if clean_key_input:
                     with st.spinner("Đang dịch và phân tích ngữ pháp bằng Gemini AI..."):
                         result_data, g_err, elapsed, model_used = call_gemini_smart_translate(
-                            clean_key_input, source_text, direction
+                            clean_key_input, source_text, effective_dir
                         )
                         if result_data:
                             meta_badge = f"{model_used} · {elapsed:.2f}s"
                         elif g_err:
-                            # Báo rõ lý do lỗi API để người dùng biết, KHÔNG âm thầm bỏ qua!
                             st.warning(f"Gemini API chưa phản hồi ({g_err}). Tạm thời hiển thị kết quả dịch nhanh cơ bản.")
 
                 if not result_data:
                     t_free = time.perf_counter()
                     with st.spinner("Đang dịch..."):
-                        result_data = fallback_fast_translate(source_text, direction)
+                        result_data = fallback_fast_translate(source_text, effective_dir)
                     meta_badge = f"Dịch nhanh · {time.perf_counter() - t_free:.2f}s"
 
                 st.session_state["last_translation_result"] = result_data
@@ -2577,6 +2749,7 @@ def main() -> None:
             render_translation_result(
                 st.session_state["last_translation_result"],
                 st.session_state.get("last_meta_badge", "Dịch nhanh"),
+                is_dark=is_dark,
             )
 
         if st.session_state["translation_history"]:
