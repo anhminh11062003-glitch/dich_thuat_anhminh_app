@@ -1,9 +1,8 @@
 """
-Anh Minh Translate — Công cụ dịch thuật, ngữ pháp & hỗ trợ học tiếng Nga cho sinh viên Việt tại Nga
+Anh Minh Translate — Dịch thuật siêu tốc, ngữ pháp 6 cách & ôn tập tiếng Nga cho sinh viên tại Nga
 Tác giả: Mai Văn Minh — Sinh viên năm 4, Chuyên ngành Đóng tàu, СПбГМТУ (Xanh-Petecbua)
 """
 
-from array import array
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -14,24 +13,18 @@ import hmac
 import html
 import io
 import json
-import math
 import os
 from pathlib import Path
+import random
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.error
 import urllib.parse
 import urllib.request
-import wave
 
 import streamlit as st
 import streamlit.components.v1 as components
-
-try:
-    import speech_recognition as sr
-except Exception:
-    sr = None
 
 try:
     from deep_translator import GoogleTranslator
@@ -67,8 +60,17 @@ st.set_page_config(
 GEMINI_API_KEY_URL = "https://aistudio.google.com/app/apikey"
 AUTHOR_NOTIFICATION_EMAIL = "anhminh11062003@gmail.com"
 FIXED_AUTHOR_AVATAR_BASE64_OR_URL = ""
-MAX_MEM_CACHE_SIZE = 250
-MAX_HISTORY_ITEMS = 25
+MAX_MEM_CACHE_SIZE = 300
+MAX_AI_CACHE_SIZE = 150
+MAX_HISTORY_ITEMS = 30
+
+# Thứ tự model ưu tiên độ trễ thấp nhất trước (tránh gọi GET /models tốn thêm 1 round-trip)
+FAST_GEMINI_MODELS = [
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash",
+]
 
 
 def _get_secret_or_env(key: str, default: str = "") -> str:
@@ -133,7 +135,6 @@ def verify_author_password(input_pwd: str) -> bool:
 
 
 def get_author_monogram_svg_uri() -> str:
-    """Ảnh đại diện tối giản dự phòng khi chưa đặt file avatar.jpg/png trong thư mục repo."""
     svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
       <rect width="120" height="120" rx="60" fill="#18181B"/>
       <text x="60" y="72" text-anchor="middle" font-family="Inter, -apple-system, sans-serif" font-size="42" font-weight="600" fill="#FAF9F6" letter-spacing="-1">MM</text>
@@ -144,7 +145,6 @@ def get_author_monogram_svg_uri() -> str:
 
 @st.cache_data(show_spinner=False)
 def get_author_avatar_data_uri() -> str:
-    """Tự động nạp ảnh thật của tác giả (avatar.jpg/png, minh.jpg/png...) hoặc dùng monogram tối giản."""
     if FIXED_AUTHOR_AVATAR_BASE64_OR_URL.strip():
         val = FIXED_AUTHOR_AVATAR_BASE64_OR_URL.strip()
         if val.startswith(("http://", "https://", "data:image/")):
@@ -308,8 +308,8 @@ def inject_localstorage_sync(
             """
             <script>
             try {
-                if (!sessionStorage.getItem("anhminh_bootstrapped_v10")) {
-                    sessionStorage.setItem("anhminh_bootstrapped_v10", "1");
+                if (!sessionStorage.getItem("anhminh_bootstrapped_v11")) {
+                    sessionStorage.setItem("anhminh_bootstrapped_v11", "1");
                     const url = new URL(window.parent.location.href);
                     let changed = false;
                     const savedKey = localStorage.getItem("anhminh_saved_gemini_key");
@@ -467,7 +467,7 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
 
 
 # ==============================================================================
-# 3. TỪ ĐIỂN TIẾNG LÓNG SINH VIÊN NGA & BỘ CHIA 6 CÁCH / ĐỘNG TỪ CƠ BẢN
+# 3. TỪ ĐIỂN TIẾNG LÓNG SINH VIÊN NGA (30 TỪ THỰC CHIẾN)
 # ==============================================================================
 RUSSIAN_SLANG_DICT: List[Dict[str, str]] = [
     {"word": "препод", "accent": "пре́под", "full": "преподаватель", "en": "lecturer", "vi": "Giảng viên, thầy/cô đại học", "example": "Препод сегодня добрый, всех отпустил пораньше."},
@@ -501,128 +501,6 @@ RUSSIAN_SLANG_DICT: List[Dict[str, str]] = [
     {"word": "староста", "accent": "ста́роста", "full": "староста группы", "en": "class monitor", "vi": "Lớp trưởng", "example": "Староста отметила всех в журнале."},
     {"word": "медосмотр", "accent": "медосмо́тр", "full": "медицинский осмотр", "en": "medical check-up", "vi": "Khám sức khỏe định kỳ (bắt buộc)", "example": "Нужно пройти медосмотр до конца месяца."},
 ]
-
-
-def fallback_russian_morphology(word_raw: str) -> Optional[Dict[str, Any]]:
-    """
-    Bộ chia 6 cách / chia động từ theo quy tắc chuẩn (dự phòng khi chưa nhập Gemini API Key).
-    Áp dụng cho từ đơn tiếng Nga.
-    """
-    w = re.sub(r"[^а-яА-ЯёЁ\-]", "", word_raw.strip()).lower()
-    if not w or len(w) < 2 or " " in word_raw.strip():
-        return None
-
-    # 1. Động từ nguyên thể (-ть / -ться)
-    if w.endswith(("ать", "ять", "еть", "ить")):
-        if w.endswith(("ать", "ять", "еть")):
-            stem = w[:-2]
-            return {
-                "word_type": "Động từ (Глагол · Nhóm I cơ bản)",
-                "lemma": w,
-                "aspect_or_gender": "Cần Gemini AI để xác định chính xác ngoại lệ & cặp thể НСВ/СВ",
-                "verb_conjugation": {
-                    "я": stem + "ю",
-                    "ты": stem + "ешь",
-                    "он / она / оно": stem + "ет",
-                    "мы": stem + "ем",
-                    "вы": stem + "ете",
-                    "они": stem + "ют",
-                    "Quá khứ": f"{stem}л / {stem}ла / {stem}ло / {stem}ли",
-                    "Mệnh lệnh": f"{stem}й / {stem}йте",
-                },
-            }
-        stem = w[:-3]
-        first_end = "у" if stem.endswith(("ж", "ш", "ч", "щ")) else "ю"
-        third_pl = "ат" if stem.endswith(("ж", "ш", "ч", "щ")) else "ят"
-        return {
-            "word_type": "Động từ (Глагол · Nhóm II cơ bản)",
-            "lemma": w,
-            "aspect_or_gender": "Cần Gemini AI để xác định biến âm phụ âm & cặp thể НСВ/СВ",
-            "verb_conjugation": {
-                "я": stem + first_end,
-                "ты": stem + "ишь",
-                "он / она / оно": stem + "ит",
-                "мы": stem + "им",
-                "вы": stem + "ите",
-                "они": stem + third_pl,
-                "Quá khứ": f"{stem}ил / {stem}ила / {stem}ило / {stem}или",
-                "Mệnh lệnh": f"{stem}и / {stem}ите",
-            },
-        }
-
-    # 2. Tính từ (-ый / -ий / -ой)
-    if w.endswith(("ый", "ий", "ой")) and len(w) >= 4:
-        stem = w[:-2]
-        soft = w.endswith("ий")
-        return {
-            "word_type": "Tính từ (Прилагательное)",
-            "lemma": w,
-            "aspect_or_gender": "Giống đực (số ít) / Số nhiều",
-            "cases_table": [
-                {"case": "1. Именительный (Ai? Cái gì?)", "singular": w, "plural": stem + ("ие" if soft else "ые")},
-                {"case": "2. Родительный (Của ai? Không có gì?)", "singular": stem + ("его" if soft else "ого"), "plural": stem + ("их" if soft else "ых")},
-                {"case": "3. Дательный (Cho ai? Tới đâu?)", "singular": stem + ("ему" if soft else "ому"), "plural": stem + ("им" if soft else "ым")},
-                {"case": "4. Винительный (Thấy ai? Cái gì?)", "singular": w + " / " + stem + ("его" if soft else "ого"), "plural": stem + ("ие" if soft else "ые") + " / " + stem + ("их" if soft else "ых")},
-                {"case": "5. Творительный (Với ai? Bằng gì?)", "singular": stem + ("им" if soft else "ым"), "plural": stem + ("ими" if soft else "ыми")},
-                {"case": "6. Предложный (Ở đâu? Về cái gì?)", "singular": stem + ("ем" if soft else "ом"), "plural": stem + ("их" if soft else "ых")},
-            ],
-        }
-
-    # 3. Danh từ giống cái (-а / -я), áp dụng quy tắc 7 chữ cái (г, к, х, ж, ч, ш, щ -> и)
-    if w.endswith(("а", "я")) and len(w) >= 3:
-        stem = w[:-1]
-        is_ya = w.endswith("я")
-        y_or_i = "и" if (is_ya or stem.endswith(("г", "к", "х", "ж", "ч", "ш", "щ"))) else "ы"
-        return {
-            "word_type": "Danh từ (Существительное)",
-            "lemma": w,
-            "aspect_or_gender": "Giống cái (Женский род)",
-            "cases_table": [
-                {"case": "1. Именительный (Cách 1 · Chủ ngữ)", "singular": w, "plural": stem + y_or_i},
-                {"case": "2. Родительный (Cách 2 · Sở hữu / Нет)", "singular": stem + y_or_i, "plural": stem + ("ь" if is_ya else "")},
-                {"case": "3. Дательный (Cách 3 · Cho ai / К)", "singular": stem + "е", "plural": stem + ("ям" if is_ya else "ам")},
-                {"case": "4. Винительный (Cách 4 · Tân ngữ)", "singular": stem + ("ю" if is_ya else "у"), "plural": stem + y_or_i},
-                {"case": "5. Творительный (Cách 5 · Với / Bằng)", "singular": stem + ("ей" if is_ya else "ой"), "plural": stem + ("ями" if is_ya else "ами")},
-                {"case": "6. Предложный (Cách 6 · В / На / О)", "singular": stem + "е", "plural": stem + ("ях" if is_ya else "ах")},
-            ],
-        }
-
-    # 4. Danh từ giống trung (-о / -е)
-    if w.endswith(("о", "е")) and len(w) >= 3:
-        stem = w[:-1]
-        is_e = w.endswith("е")
-        return {
-            "word_type": "Danh từ (Существительное)",
-            "lemma": w,
-            "aspect_or_gender": "Giống trung (Средний род)",
-            "cases_table": [
-                {"case": "1. Именительный (Cách 1 · Chủ ngữ)", "singular": w, "plural": stem + ("я" if is_e else "а")},
-                {"case": "2. Родительный (Cách 2 · Sở hữu / Нет)", "singular": stem + ("я" if is_e else "а"), "plural": stem + ("ей" if is_e else "")},
-                {"case": "3. Дательный (Cách 3 · Cho ai / К)", "singular": stem + ("ю" if is_e else "у"), "plural": stem + ("ям" if is_e else "ам")},
-                {"case": "4. Винительный (Cách 4 · Tân ngữ)", "singular": w, "plural": stem + ("я" if is_e else "а")},
-                {"case": "5. Творительный (Cách 5 · Với / Bằng)", "singular": stem + ("ем" if is_e else "ом"), "plural": stem + ("ями" if is_e else "ами")},
-                {"case": "6. Предложный (Cách 6 · В / На / О)", "singular": stem + "е", "plural": stem + ("ях" if is_e else "ах")},
-            ],
-        }
-
-    # 5. Danh từ giống đực (kết thúc phụ âm), áp dụng quy tắc 7 chữ cái
-    if w[-1] in "бвгджзклмнпрстфхцчшщ":
-        pl_end = "и" if w[-1] in "гкхжчшщ" else "ы"
-        return {
-            "word_type": "Danh từ (Существительное)",
-            "lemma": w,
-            "aspect_or_gender": "Giống đực (Мужской род)",
-            "cases_table": [
-                {"case": "1. Именительный (Cách 1 · Chủ ngữ)", "singular": w, "plural": w + pl_end},
-                {"case": "2. Родительный (Cách 2 · Sở hữu / Нет)", "singular": w + "а", "plural": w + "ов"},
-                {"case": "3. Дательный (Cách 3 · Cho ai / К)", "singular": w + "у", "plural": w + "ам"},
-                {"case": "4. Винительный (Cách 4 · Tân ngữ)", "singular": w + " (vật) / " + w + "а (người)", "plural": w + pl_end + " / " + w + "ов"},
-                {"case": "5. Творительный (Cách 5 · Với / Bằng)", "singular": w + "ом", "plural": w + "ами"},
-                {"case": "6. Предложный (Cách 6 · В / На / О)", "singular": w + "е", "plural": w + "ах"},
-            ],
-        }
-
-    return None
 
 
 # ==============================================================================
@@ -824,13 +702,13 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             background-color: transparent !important;
             border: 1px solid transparent !important;
             border-radius: 8px !important;
-            padding: 8px 15px !important;
+            padding: 8px 16px !important;
             box-shadow: none !important;
         }}
         div[data-testid="stTabs"] button[data-baseweb="tab"] p {{
             color: #52525B !important;
             font-weight: 500 !important;
-            font-size: 0.91rem !important;
+            font-size: 0.92rem !important;
         }}
         div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {{
             background-color: #F4F3EE !important;
@@ -856,14 +734,10 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             fill: #18181B !important;
             font-weight: 500 !important;
         }}
-
-        div[data-testid="stFileUploader"] section,
-        div[data-testid="stAudioInput"] {{
-            background-color: #FFFFFF !important;
-            border-radius: 10px !important;
-        }}
         div[data-testid="stFileUploader"] section {{
+            background-color: #FFFFFF !important;
             border: 1px dashed #D4D4D8 !important;
+            border-radius: 10px !important;
         }}
         div[data-testid="stFileUploader"] section *,
         div[data-testid="stFileUploader"] small {{
@@ -875,7 +749,7 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             border: 1px solid #D4D4D8 !important;
         }}
 
-        /* HEADER + THẺ TÁC GIẢ TỐI GIẢN */
+        /* HEADER + TÁC GIẢ */
         .minimal-header {{
             padding-bottom: 18px;
             margin-bottom: 20px;
@@ -916,17 +790,9 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             border: 1px solid #D4D4D8;
             flex-shrink: 0;
         }}
-        .author-chip-name {{
-            font-size: 0.86rem;
-            font-weight: 600;
-            color: #18181B;
-            line-height: 1.25;
-        }}
-        .author-chip-role {{
-            font-size: 0.76rem;
-            color: #52525B;
-            line-height: 1.25;
-        }}
+        .author-chip-name {{ font-size: 0.86rem; font-weight: 600; color: #18181B; line-height: 1.25; }}
+        .author-chip-role {{ font-size: 0.76rem; color: #52525B; line-height: 1.25; }}
+
         .sidebar-author-box {{
             display: flex;
             align-items: center;
@@ -974,16 +840,23 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             white-space: pre-wrap;
             word-break: break-word;
         }}
-        .tone-card {{
-            background-color: #FFFFFF;
-            border: 1px solid #E5E4DF;
-            border-radius: 12px;
-            padding: 15px 17px;
-            height: 100%;
+        .example-row {{
+            padding: 11px 0;
+            border-bottom: 1px solid #E5E4DF;
         }}
-        .tone-heading {{ font-size: 0.83rem; font-weight: 600; color: #52525B; margin-bottom: 6px; }}
-        .tone-body {{ font-size: 1.0rem; font-weight: 600; color: #18181B; line-height: 1.55; margin-bottom: 6px; }}
-        .tone-sub {{ font-size: 0.85rem; color: #52525B; line-height: 1.5; }}
+        .example-row:last-child {{ border-bottom: none; padding-bottom: 2px; }}
+        .example-ru {{ font-size: 1.0rem; font-weight: 600; color: #18181B; line-height: 1.5; }}
+        .example-vi {{ font-size: 0.91rem; color: #52525B; margin-top: 3px; line-height: 1.5; }}
+        .example-tag {{
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: #52525B;
+            background: #F4F3EE;
+            padding: 2px 8px;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }}
 
         .clean-table {{
             width: 100%;
@@ -1018,17 +891,6 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             line-height: 1.62;
         }}
 
-        .lecture-item {{
-            background: #FFFFFF;
-            border: 1px solid #E5E4DF;
-            border-radius: 10px;
-            padding: 14px 16px;
-            margin-bottom: 10px;
-        }}
-        .lecture-meta {{ font-size: 0.78rem; color: #71717A; margin-bottom: 5px; }}
-        .lecture-src {{ font-size: 0.96rem; color: #18181B; margin-bottom: 8px; line-height: 1.55; }}
-        .lecture-tgt {{ font-size: 1.0rem; font-weight: 600; color: #18181B; background: #FAF9F6; padding: 10px 12px; border-radius: 8px; line-height: 1.55; }}
-
         .flashcard-minimal {{
             background-color: #FFFFFF;
             border: 1px solid #D4D4D8;
@@ -1037,7 +899,7 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
             text-align: center;
             margin: 12px 0;
         }}
-        .flashcard-word {{ font-size: 1.7rem; font-weight: 700; color: #18181B; letter-spacing: -0.02em; }}
+        .flashcard-word {{ font-size: 1.72rem; font-weight: 700; color: #18181B; letter-spacing: -0.02em; }}
         .flashcard-back {{ margin-top: 16px; padding-top: 16px; border-top: 1px solid #E5E4DF; font-size: 1.1rem; font-weight: 600; color: #18181B; }}
 
         @media (max-width: 768px) {{
@@ -1051,8 +913,29 @@ def inject_editorial_minimal_css(is_author_admin: bool = False) -> None:
 
 
 # ==============================================================================
-# 5. ĐỘNG CƠ DỊCH + PHÂN TÍCH 6 CÁCH / CHIA ĐỘNG TỪ / NGỮ PHÁP CÂU DÀI
+# 5. PHÂN LOẠI ĐẦU VÀO, KIỂM SOÁT CHẤT LƯỢNG & ĐỘNG CƠ DỊCH API SIÊU TỐC
 # ==============================================================================
+def classify_input_type(text: str) -> str:
+    """
+    Phân loại chính xác đầu vào để hiển thị đúng cấu trúc, không hiện kết quả thừa hoặc bừa:
+    - 'word': 1 từ đơn hoặc cụm danh từ rất ngắn (1-2 từ, không có dấu kết câu, 1 dòng)
+    - 'sentence': 1 câu ngắn/trung bình (3-25 từ, <= 1 dấu kết câu)
+    - 'paragraph': đoạn văn dài (>25 từ hoặc nhiều câu / nhiều dòng)
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return "word"
+    lines = [ln for ln in cleaned.splitlines() if ln.strip()]
+    words = cleaned.split()
+    sentence_ends = len(re.findall(r"[.!?…]+", cleaned))
+
+    if len(lines) == 1 and len(words) <= 2 and sentence_ends == 0:
+        return "word"
+    if len(lines) <= 2 and len(words) <= 25 and sentence_ends <= 1:
+        return "sentence"
+    return "paragraph"
+
+
 def detect_slang_in_text(text: str) -> List[Dict[str, str]]:
     if not text:
         return []
@@ -1134,7 +1017,7 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
             "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t",
             data=post_body, headers=headers_form, method="POST",
         )
-        with urllib.request.urlopen(req1, timeout=7) as resp:
+        with urllib.request.urlopen(req1, timeout=6) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             if isinstance(data, list) and data and isinstance(data[0], list):
                 chunks = [c[0] for c in data[0] if c and c[0]]
@@ -1148,7 +1031,7 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
             "https://translate.google.com/translate_a/single?client=at&dt=t&dj=1",
             data=post_body, headers=headers_form, method="POST",
         )
-        with urllib.request.urlopen(req2, timeout=7) as resp:
+        with urllib.request.urlopen(req2, timeout=6) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             sentences = data.get("sentences", [])
             if sentences:
@@ -1163,7 +1046,7 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
             "https://clients5.google.com/translate_a/t?client=dict-chrome-ex",
             data=post_body, headers=headers_form, method="POST",
         )
-        with urllib.request.urlopen(req3, timeout=7) as resp:
+        with urllib.request.urlopen(req3, timeout=6) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             if isinstance(data, list) and data:
                 if isinstance(data[0], str):
@@ -1175,19 +1058,6 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
     except Exception:
         pass
 
-    if len(cleaned) <= 480:
-        try:
-            src_mm = "ru" if src == "auto" else src
-            mm_url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(cleaned)}&langpair={src_mm}|{tgt}"
-            req4 = urllib.request.Request(mm_url, headers={"User-Agent": headers_form["User-Agent"]})
-            with urllib.request.urlopen(req4, timeout=6) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                t = data.get("responseData", {}).get("translatedText", "")
-                if t and "MYMEMORY WARNING" not in t.upper():
-                    return t
-        except Exception:
-            pass
-
     if GoogleTranslator is not None:
         try:
             res = GoogleTranslator(source=src, target=tgt).translate(cleaned)
@@ -1198,12 +1068,10 @@ def _try_multi_endpoint_translate(cleaned: str, src: str, tgt: str) -> Optional[
     return None
 
 
-def _get_lru_cache() -> OrderedDict:
-    if "translation_mem_cache" not in st.session_state or not isinstance(
-        st.session_state["translation_mem_cache"], OrderedDict
-    ):
-        st.session_state["translation_mem_cache"] = OrderedDict()
-    return st.session_state["translation_mem_cache"]
+def _get_lru_cache(name: str) -> OrderedDict:
+    if name not in st.session_state or not isinstance(st.session_state[name], OrderedDict):
+        st.session_state[name] = OrderedDict()
+    return st.session_state[name]
 
 
 def fast_free_translate(text: str, src: str, tgt: str) -> str:
@@ -1213,7 +1081,7 @@ def fast_free_translate(text: str, src: str, tgt: str) -> str:
     if src == tgt:
         return cleaned
 
-    cache = _get_lru_cache()
+    cache = _get_lru_cache("translation_mem_cache")
     cache_key = f"{src}::{tgt}::{hashlib.sha256(cleaned.encode('utf-8')).hexdigest()}"
     if cache_key in cache:
         cache.move_to_end(cache_key)
@@ -1235,57 +1103,34 @@ def fast_free_translate(text: str, src: str, tgt: str) -> str:
     return "Máy chủ dịch miễn phí đang tạm bận. Vui lòng thử lại sau vài giây hoặc nhập Gemini API Key ở thanh bên."
 
 
-def discover_available_gemini_models(api_key: str) -> List[str]:
-    clean_k = clean_api_key(api_key)
-    preferred = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro"]
-    if not clean_k:
-        return preferred
-
-    cache_name = f"gemini_models_{hashlib.sha256(clean_k.encode('utf-8')).hexdigest()[:12]}"
-    if cache_name in st.session_state:
-        return st.session_state[cache_name]
-
-    discovered: List[str] = []
-    for api_ver in ("v1beta", "v1"):
-        try:
-            url = f"https://generativelanguage.googleapis.com/{api_ver}/models?key={urllib.parse.quote(clean_k)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                for m in data.get("models", []):
-                    if "generateContent" in m.get("supportedGenerationMethods", []):
-                        short_name = m.get("name", "").replace("models/", "")
-                        if "gemini" in short_name and "embedding" not in short_name and short_name not in discovered:
-                            discovered.append(short_name)
-                if discovered:
-                    break
-        except Exception:
-            pass
-
-    if discovered:
-        ordered = [p for p in preferred if p in discovered] + [d for d in discovered if d not in preferred]
-        st.session_state[cache_name] = ordered
-        return ordered
-    return preferred
-
-
-def call_gemini_multimodal_rest(
+def call_gemini_fast_rest(
     api_key: str,
     parts: List[Dict[str, Any]],
-    expect_json: bool = True,
-    temperature: float = 0.2,
-    timeout_sec: int = 28,
-) -> Tuple[Optional[str], Optional[str]]:
+    temperature: float = 0.15,
+    timeout_sec: int = 20,
+) -> Tuple[Optional[str], Optional[str], str]:
+    """
+    Gọi Gemini API tốc độ cao:
+    - Không gọi GET /models thừa ở mỗi lượt.
+    - Ghim ngay model phản hồi nhanh nhất thành công vào session_state cho các lần sau.
+    - Tắt thinkingBudget=0 trên gemini-2.5-flash để phản hồi tức thì (~1 giây).
+    """
     clean_k = clean_api_key(api_key)
     if not clean_k:
-        return None, "Empty API Key"
+        return None, "Empty API Key", ""
 
+    pinned = st.session_state.get("pinned_gemini_model", "")
+    models = ([pinned] + [m for m in FAST_GEMINI_MODELS if m != pinned]) if pinned else list(FAST_GEMINI_MODELS)
     last_error = ""
-    for model_name in discover_available_gemini_models(clean_k)[:5]:
+
+    for model_name in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(clean_k)}"
-        gen_cfg: Dict[str, Any] = {"temperature": temperature}
-        if expect_json:
-            gen_cfg["responseMimeType"] = "application/json"
+        gen_cfg: Dict[str, Any] = {
+            "temperature": temperature,
+            "responseMimeType": "application/json",
+        }
+        if "2.5" in model_name:
+            gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
 
         payload = {"contents": [{"parts": parts}], "generationConfig": gen_cfg}
         for attempt in range(2):
@@ -1300,7 +1145,8 @@ def call_gemini_multimodal_rest(
                     if candidates:
                         resp_parts = candidates[0].get("content", {}).get("parts", [])
                         if resp_parts and "text" in resp_parts[0]:
-                            return resp_parts[0]["text"], None
+                            st.session_state["pinned_gemini_model"] = model_name
+                            return resp_parts[0]["text"], None, model_name
             except urllib.error.HTTPError as http_err:
                 err_body = ""
                 try:
@@ -1309,18 +1155,18 @@ def call_gemini_multimodal_rest(
                     pass
                 last_error = f"HTTP {http_err.code}"
                 if "API_KEY_INVALID" in err_body:
-                    return None, "Gemini API Key không hợp lệ."
-                if http_err.code in (429, 503) and attempt == 0:
-                    time.sleep(0.9)
+                    return None, "Gemini API Key không hợp lệ.", ""
+                if http_err.code == 400 and "thinkingConfig" in payload["generationConfig"]:
+                    payload["generationConfig"].pop("thinkingConfig", None)
                     continue
-                if http_err.code == 400 and expect_json:
-                    payload["generationConfig"] = {"temperature": temperature}
+                if http_err.code in (429, 503) and attempt == 0:
+                    time.sleep(0.5)
                     continue
                 break
             except Exception as exc:
                 last_error = str(exc)
                 break
-    return None, last_error
+    return None, last_error, ""
 
 
 def _parse_json_response(raw_text: str) -> Optional[Dict]:
@@ -1331,75 +1177,204 @@ def _parse_json_response(raw_text: str) -> Optional[Dict]:
     return json.loads(cleaned)
 
 
-def call_gemini_smart_translate(api_key: str, source_text: str, direction: str) -> Tuple[Optional[Dict], Optional[str]]:
+def validate_and_clean_ai_result(parsed: Dict[str, Any], input_kind: str) -> Dict[str, Any]:
+    """
+    Kiểm soát chặt chất lượng đầu ra: lọc bỏ mọi bảng/trường rỗng, placeholder hoặc sai loại đầu vào
+    để tuyệt đối không hiện kết quả bừa.
+    """
+    if not isinstance(parsed, dict):
+        return {}
+
+    def _valid_str(v: Any) -> str:
+        s = str(v or "").strip()
+        if s.lower() in ("", "...", "n/a", "none", "null", "không có", "—", "-"):
+            return ""
+        return s
+
+    out: Dict[str, Any] = {
+        "input_kind": input_kind,
+        "main_translation": _valid_str(parsed.get("main_translation")),
+        "ru_version": _valid_str(parsed.get("ru_version")),
+        "vi_version": _valid_str(parsed.get("vi_version")),
+        "en_version": _valid_str(parsed.get("en_version")),
+        "context_note": _valid_str(parsed.get("context_note")),
+        "morphology": {},
+        "sentence_grammar": [],
+        "context_examples": [],
+        "slang_explanations": [],
+        "vocabulary_table": [],
+    }
+
+    # 1. Chỉ cho phép bảng chia 6 cách / chia động từ khi đầu vào là từ đơn/cụm ngắn
+    if input_kind == "word" and isinstance(parsed.get("morphology"), dict):
+        m = parsed["morphology"]
+        clean_m: Dict[str, Any] = {
+            "word_type": _valid_str(m.get("word_type")),
+            "lemma": _valid_str(m.get("lemma")),
+            "aspect_or_gender": _valid_str(m.get("aspect_or_gender")),
+            "usage_note": _valid_str(m.get("usage_note")),
+        }
+
+        raw_cases = m.get("cases_table")
+        if isinstance(raw_cases, list) and len(raw_cases) == 6:
+            valid_cases = [
+                {
+                    "case": _valid_str(r.get("case")),
+                    "singular": _valid_str(r.get("singular")) or "—",
+                    "plural": _valid_str(r.get("plural")) or "—",
+                }
+                for r in raw_cases
+                if isinstance(r, dict) and _valid_str(r.get("case")) and (_valid_str(r.get("singular")) or _valid_str(r.get("plural")))
+            ]
+            if len(valid_cases) == 6:
+                clean_m["cases_table"] = valid_cases
+
+        raw_conj = m.get("verb_conjugation")
+        if isinstance(raw_conj, dict):
+            valid_conj = {str(k).strip(): _valid_str(v) for k, v in raw_conj.items() if _valid_str(v)}
+            if len(valid_conj) >= 6:
+                clean_m["verb_conjugation"] = valid_conj
+
+        if clean_m.get("cases_table") or clean_m.get("verb_conjugation") or clean_m.get("usage_note"):
+            out["morphology"] = clean_m
+
+    # 2. Giải thích ngữ pháp câu/đoạn (chỉ giữ mục có đủ cụm từ + giải thích thật)
+    if input_kind in ("sentence", "paragraph") and isinstance(parsed.get("sentence_grammar"), list):
+        out["sentence_grammar"] = [
+            {
+                "segment": _valid_str(g.get("segment")),
+                "grammar_tag": _valid_str(g.get("grammar_tag")),
+                "explanation": _valid_str(g.get("explanation")),
+            }
+            for g in parsed["sentence_grammar"]
+            if isinstance(g, dict) and _valid_str(g.get("segment")) and _valid_str(g.get("explanation"))
+        ][:8]
+
+    # 3. Ví dụ áp dụng theo ngữ cảnh (bắt buộc có cả câu tiếng Nga & nghĩa tiếng Việt)
+    if isinstance(parsed.get("context_examples"), list):
+        out["context_examples"] = [
+            {
+                "context": _valid_str(ex.get("context")) or "Ví dụ áp dụng",
+                "ru": _valid_str(ex.get("ru")),
+                "vi": _valid_str(ex.get("vi")),
+            }
+            for ex in parsed["context_examples"]
+            if isinstance(ex, dict) and _valid_str(ex.get("ru")) and _valid_str(ex.get("vi"))
+        ][:4]
+
+    # 4. Tiếng lóng (chỉ giữ khi thực sự có trong văn bản)
+    if isinstance(parsed.get("slang_explanations"), list):
+        out["slang_explanations"] = [
+            {
+                "term": _valid_str(s.get("term")),
+                "full_form": _valid_str(s.get("full_form")),
+                "meaning_vi": _valid_str(s.get("meaning_vi")),
+            }
+            for s in parsed["slang_explanations"]
+            if isinstance(s, dict) and _valid_str(s.get("term")) and _valid_str(s.get("meaning_vi"))
+        ]
+
+    # 5. Bảng từ vựng (có dấu trọng âm)
+    if isinstance(parsed.get("vocabulary_table"), list):
+        out["vocabulary_table"] = [
+            {
+                "ru_accent": _valid_str(v.get("ru_accent")),
+                "vi": _valid_str(v.get("vi")),
+                "en": _valid_str(v.get("en")),
+            }
+            for v in parsed["vocabulary_table"]
+            if isinstance(v, dict) and _valid_str(v.get("ru_accent")) and _valid_str(v.get("vi"))
+        ][:10]
+
+    return out
+
+
+def call_gemini_smart_translate(
+    api_key: str, source_text: str, direction: str
+) -> Tuple[Optional[Dict], Optional[str], float, str]:
+    """Dịch & phân tích chính xác theo loại đầu vào (word / sentence / paragraph) có LRU cache."""
+    t0 = time.perf_counter()
+    input_kind = classify_input_type(source_text)
+
+    ai_cache = _get_lru_cache("gemini_result_cache")
+    cache_key = hashlib.sha256(f"{direction}::{input_kind}::{source_text.strip()}".encode("utf-8")).hexdigest()
+    if cache_key in ai_cache:
+        ai_cache.move_to_end(cache_key)
+        return ai_cache[cache_key], None, 0.01, "Cache"
+
+    if input_kind == "word":
+        task_instruction = """
+Đầu vào là TỪ ĐƠN hoặc CỤM TỪ NGẮN. Quy tắc kiểm soát chất lượng NGHIÊM NGẶT:
+- Xác định đúng từ loại tiếng Nga (Danh từ / Tính từ / Đại từ / Động từ / Trạng từ / Giới từ).
+- Nếu là ĐỘNG TỪ: điền CHÍNH XÁC 100% bảng `verb_conjugation` (я, ты, он/она/оно, мы, вы, они, Quá khứ, Mệnh lệnh), ghi rõ cặp thể НСВ/СВ vào `aspect_or_gender`, đặt `cases_table` = [].
+- Nếu là DANH TỪ / TÍNH TỪ / ĐẠI TỪ: điền CHÍNH XÁC 100% đủ 6 cách vào `cases_table` (1. Именительный -> 6. Предложный, cả số ít & số nhiều, kể cả bất quy tắc/biến âm, đặt dấu trọng âm \\u0301). Nếu danh từ chỉ có số ít (như молоко) thì plural ghi "—". Đặt `verb_conjugation` = {}.
+- Nếu là TRẠNG TỪ / TỪ KHÔNG BIẾN CÁCH: đặt `cases_table` = [], `verb_conjugation` = {}, giải thích cách dùng & cấp so sánh (nếu có) vào `usage_note`.
+- Đặt `sentence_grammar` = [].
+- Tạo đúng 3 ví dụ thực tế (`context_examples`) áp dụng CHÍNH từ này trong ngữ cảnh tự nhiên (đại học, đời sống, hoặc kỹ thuật tùy nghĩa của từ), có dấu trọng âm \\u0301 và dịch tiếng Việt chuẩn.
+"""
+    elif input_kind == "sentence":
+        task_instruction = """
+Đầu vào là MỘT CÂU HOÀN CHỈNH. Quy tắc kiểm soát chất lượng NGHIÊM NGẶT:
+- Đặt `morphology` = {} (không chia 6 cách bừa bãi cho cả câu).
+- Điền `sentence_grammar` phân tích 3–6 điểm ngữ pháp cốt lõi trong câu tiếng Nga (chỉ rõ từ/cụm nào chia Cách mấy, tại sao, động từ thể НСВ/СВ nào, giới từ đi kèm). Không suy diễn sai.
+- Tạo 2–3 ví dụ áp dụng (`context_examples`) dùng lại cấu trúc ngữ pháp hoặc từ khóa chính trong câu này vào tình huống thực tế của sinh viên tại Nga.
+- Điền `vocabulary_table` 3–6 từ khóa quan trọng nhất trong câu (có dấu trọng âm \\u0301).
+"""
+    else:
+        task_instruction = """
+Đầu vào là ĐOẠN VĂN DÀI. Quy tắc kiểm soát chất lượng NGHIÊM NGẶT:
+- Dịch toàn bộ đoạn văn mạch lạc, giữ đúng bố cục xuống dòng, chuẩn thuật ngữ.
+- Đặt `morphology` = {}.
+- Điền `sentence_grammar` chỉ chọn 3–5 cấu trúc ngữ pháp / cách chia đáng chú ý nhất trong đoạn.
+- Điền `vocabulary_table` 5–8 thuật ngữ / từ vựng quan trọng nhất trong đoạn (có dấu trọng âm \\u0301).
+- Tạo 2 ví dụ áp dụng (`context_examples`) minh họa cách dùng các thuật ngữ/cấu trúc nổi bật trong đoạn.
+"""
+
     system_prompt = f"""
-Bạn là giáo sư ngôn ngữ học Nga – Việt và chuyên gia dịch thuật cho sinh viên Việt Nam tại Nga.
-Hãy TỰ ĐỘNG nhận diện ngữ cảnh (kỹ thuật/đóng tàu, bài giảng đại học, thủ tục hành chính/visa, hay giao tiếp đời thường) và dịch theo chiều "{direction}".
-
-ĐẶC BIỆT QUAN TRỌNG VỀ NGỮ PHÁP TIẾNG NGA:
-1. Nếu đầu vào là **1 từ hoặc 1 cụm từ ngắn (1-3 từ)**:
-   - Xác định rõ từ loại (`Danh từ`, `Tính từ`, `Động từ`, `Trạng từ`, `Đại từ`...).
-   - Nếu là **Động từ**: điền đầy đủ bảng chia động từ `verb_conjugation` (я, ты, он/она/оно, мы, вы, они, Quá khứ, Mệnh lệnh, Cặp thể НСВ/СВ). Để `cases_table` là mảng rỗng `[]`.
-   - Nếu là **Danh từ / Tính từ / Đại từ / Cụm danh từ**: điền đầy đủ bảng 6 cách tiếng Nga `cases_table` (đủ 6 cách: 1. Именительный, 2. Родительный, 3. Дательный, 4. Винительный, 5. Творительный, 6. Предложный — gồm cả Số ít `singular` và Số nhiều `plural`, có dấu trọng âm \\u0301). Để `verb_conjugation` là `{{}}`.
-   - Nếu là **Trạng từ** (không biến cách): ghi rõ trong `morphology.usage_note` cách dùng, mức so sánh (nếu có) và từ đồng nghĩa/trái nghĩa.
-2. Nếu đầu vào là **Câu hoặc đoạn văn dài (>= 4 từ)**:
-   - Điền chi tiết `sentence_grammar` giải thích ngữ pháp trong câu tiếng Nga tương ứng: chỉ rõ từng cụm/từ đang chia ở **Cách mấy (Cách 1-6)** và tại sao (đi với giới từ hay động từ nào), động từ chính chia ở thể **НСВ/СВ** nào & thì gì.
-   - Đồng thời có thể trích 1 danh từ hoặc động từ quan trọng nhất trong câu vào `morphology` (nếu hữu ích).
-
-CHỈ TRẢ VỀ đúng 1 đối tượng JSON hợp lệ:
+Bạn là giáo sư ngôn ngữ học Nga – Việt. Chiều dịch: "{direction}".
+{task_instruction}
+CHỈ TRẢ VỀ đúng 1 JSON hợp lệ (tuyệt đối không bịa đặt thông tin không chắc chắn):
 {{
-  "main_translation": "Bản dịch tự nhiên, chuẩn xác nhất",
-  "ru_version": "Bản tiếng Nga tương ứng (có thể kèm trọng âm khi là từ đơn)",
+  "main_translation": "Bản dịch chuẩn xác nhất",
+  "ru_version": "Bản tiếng Nga tương ứng",
   "vi_version": "Bản tiếng Việt tương ứng",
   "en_version": "Bản tiếng Anh đối chiếu",
   "morphology": {{
-    "word_type": "Từ loại (VD: Danh từ · Giống cái / Động từ · НСВ / Tính từ / Trạng từ)",
-    "lemma": "Dạng nguyên thể tiếng Nga có dấu trọng âm \\u0301",
-    "aspect_or_gender": "Giống đực/cái/trung hoặc cặp thể НСВ/СВ (VD: писать [НСВ] / написать [СВ])",
-    "cases_table": [
-      {{"case": "1. Именительный (Cách 1)", "singular": "...", "plural": "..."}},
-      {{"case": "2. Родительный (Cách 2)", "singular": "...", "plural": "..."}},
-      {{"case": "3. Дательный (Cách 3)", "singular": "...", "plural": "..."}},
-      {{"case": "4. Винительный (Cách 4)", "singular": "...", "plural": "..."}},
-      {{"case": "5. Творительный (Cách 5)", "singular": "...", "plural": "..."}},
-      {{"case": "6. Предложный (Cách 6)", "singular": "...", "plural": "..."}}
-    ],
-    "verb_conjugation": {{
-      "я": "...", "ты": "...", "он / она / оно": "...", "мы": "...", "вы": "...", "они": "...",
-      "Quá khứ": "...", "Mệnh lệnh": "..."
-    }},
-    "usage_note": "Ghi chú cách dùng, giới từ đi kèm hoặc từ đồng nghĩa/trái nghĩa (nếu là trạng từ/từ đặc biệt)."
+    "word_type": "",
+    "lemma": "",
+    "aspect_or_gender": "",
+    "cases_table": [{{"case": "1. Именительный (Cách 1)", "singular": "", "plural": ""}}],
+    "verb_conjugation": {{"я": "", "ты": "", "он / она / оно": "", "мы": "", "вы": "", "они": "", "Quá khứ": "", "Mệnh lệnh": ""}},
+    "usage_note": ""
   }},
-  "sentence_grammar": [
-    {{"segment": "Từ hoặc cụm từ trong câu tiếng Nga", "grammar_tag": "Cách mấy / Thể động từ / Cấu trúc", "explanation": "Giải thích ngắn gọn dễ hiểu bằng tiếng Việt"}}
-  ],
-  "slang_explanations": [
-    {{"term": "Từ lóng (nếu có)", "full_form": "Dạng đầy đủ", "meaning_vi": "Giải nghĩa"}}
-  ],
-  "vocabulary_table": [
-    {{"ru_accent": "Từ khóa tiếng Nga có dấu trọng âm \\u0301", "en": "Nghĩa tiếng Anh", "vi": "Nghĩa tiếng Việt"}}
-  ],
-  "russian_reply_variants": {{
-    "formal_vy": "Câu tiếng Nga lịch sự ngôi «Вы»",
-    "formal_vy_vi_note": "Nghĩa tiếng Việt",
-    "casual_ty": "Câu tiếng Nga thân mật ngôi «Ты»",
-    "casual_ty_vi_note": "Nghĩa tiếng Việt"
-  }},
-  "context_note": "1-2 câu tóm tắt ngữ pháp hoặc lưu ý giao tiếp quan trọng."
+  "sentence_grammar": [{{"segment": "", "grammar_tag": "", "explanation": ""}}],
+  "context_examples": [{{"context": "Ngữ cảnh ngắn", "ru": "Câu tiếng Nga có dấu trọng âm \\u0301", "vi": "Nghĩa tiếng Việt"}}],
+  "slang_explanations": [{{"term": "", "full_form": "", "meaning_vi": ""}}],
+  "vocabulary_table": [{{"ru_accent": "", "vi": "", "en": ""}}],
+  "context_note": "1-2 câu lưu ý ngữ pháp/ngữ cảnh ngắn gọn."
 }}
 """
-    raw_text, err = call_gemini_multimodal_rest(
+    raw_text, err, model_used = call_gemini_fast_rest(
         api_key=api_key,
-        parts=[{"text": f"{system_prompt}\n\n---\nVăn bản:\n{source_text}"}],
-        expect_json=True,
-        temperature=0.2,
+        parts=[{"text": f"{system_prompt}\n\nVăn bản:\n{source_text.strip()}"}],
+        temperature=0.1,
+        timeout_sec=20,
     )
+    elapsed = time.perf_counter() - t0
     if not raw_text:
-        return None, err
+        return None, err, elapsed, ""
+
     try:
-        return _parse_json_response(raw_text), None
+        parsed = _parse_json_response(raw_text)
+        cleaned = validate_and_clean_ai_result(parsed or {}, input_kind)
+        if not cleaned.get("main_translation"):
+            return None, "Kết quả trống", elapsed, model_used
+        ai_cache[cache_key] = cleaned
+        while len(ai_cache) > MAX_AI_CACHE_SIZE:
+            ai_cache.popitem(last=False)
+        return cleaned, None, elapsed, model_used
     except Exception as exc:
-        return None, str(exc)
+        return None, str(exc), elapsed, model_used
 
 
 def call_gemini_ocr_and_translate_image(
@@ -1407,42 +1382,34 @@ def call_gemini_ocr_and_translate_image(
 ) -> Tuple[Optional[Dict], Optional[str]]:
     b64_img = base64.b64encode(image_bytes).decode("utf-8")
     prompt = f"""
-Bạn là trợ lý học thuật Nga – Việt cho sinh viên tại Nga.
-Đọc chính xác toàn bộ chữ trong ảnh (slide bài giảng, bảng viết, tài liệu hoặc tin nhắn), dịch theo chiều "{direction}" và giải thích ngắn gọn ngữ pháp / từ vựng quan trọng.
+Đọc chính xác chữ trong ảnh (slide bài giảng, bảng viết hoặc tài liệu), dịch theo chiều "{direction}", giải thích ngắn gọn ngữ pháp quan trọng và đưa ra 2 ví dụ áp dụng.
 CHỈ TRẢ VỀ JSON:
 {{
   "extracted_text": "Văn bản gốc đọc được từ ảnh",
-  "main_translation": "Bản dịch tự nhiên, chuẩn xác",
+  "main_translation": "Bản dịch chuẩn xác",
   "ru_version": "Bản tiếng Nga",
   "vi_version": "Bản tiếng Việt",
-  "en_version": "Bản tiếng Anh đối chiếu",
-  "sentence_grammar": [
-    {{"segment": "Cụm từ quan trọng", "grammar_tag": "Cách / Ngữ pháp", "explanation": "Giải thích ngắn"}}
-  ],
+  "en_version": "Bản tiếng Anh",
+  "sentence_grammar": [{{"segment": "", "grammar_tag": "", "explanation": ""}}],
+  "context_examples": [{{"context": "", "ru": "", "vi": ""}}],
   "slang_explanations": [],
-  "vocabulary_table": [
-    {{"ru_accent": "Từ khóa tiếng Nga có dấu trọng âm \\u0301", "en": "Nghĩa tiếng Anh", "vi": "Nghĩa tiếng Việt"}}
-  ],
-  "russian_reply_variants": {{
-    "formal_vy": "Câu hỏi/trao đổi ngôi «Вы»",
-    "formal_vy_vi_note": "Nghĩa tiếng Việt",
-    "casual_ty": "Câu trao đổi ngôi «Ты»",
-    "casual_ty_vi_note": "Nghĩa tiếng Việt"
-  }},
+  "vocabulary_table": [{{"ru_accent": "", "vi": "", "en": ""}}],
   "context_note": "Tóm tắt 1-2 ý chính cần nhớ từ ảnh."
 }}
 """
-    raw_text, err = call_gemini_multimodal_rest(
+    raw_text, err, _ = call_gemini_fast_rest(
         api_key=api_key,
         parts=[{"text": prompt}, {"inlineData": {"mimeType": mime_type, "data": b64_img}}],
-        expect_json=True,
-        temperature=0.15,
-        timeout_sec=30,
+        temperature=0.1,
+        timeout_sec=28,
     )
     if not raw_text:
         return None, err
     try:
-        return _parse_json_response(raw_text), None
+        parsed = _parse_json_response(raw_text) or {}
+        cleaned = validate_and_clean_ai_result(parsed, "paragraph")
+        cleaned["extracted_text"] = str(parsed.get("extracted_text", "")).strip()
+        return cleaned, None
     except Exception as exc:
         return None, str(exc)
 
@@ -1479,11 +1446,15 @@ def extract_text_from_uploaded_doc(uploaded_file) -> Tuple[Optional[str], Option
             return text, None
         except Exception as exc:
             return None, f"Lỗi đọc tệp .pdf: {exc}"
-
     return None, "Định dạng tệp chưa được hỗ trợ."
 
 
-def fallback_smart_translate(source_text: str, direction: str) -> Dict:
+def fallback_fast_translate(source_text: str, direction: str) -> Dict[str, Any]:
+    """
+    Chế độ dịch miễn phí (không cần API Key): chỉ dịch chính xác & nhận diện tiếng lóng đã kiểm chứng,
+    TUYỆT ĐỐI không chia 6 cách đoán mò gây sai ngoại lệ.
+    """
+    input_kind = classify_input_type(source_text)
     text_for_trans = source_text.strip()
     detected_slang = detect_slang_in_text(text_for_trans)
     expanded_ru = text_for_trans
@@ -1520,443 +1491,299 @@ def fallback_smart_translate(source_text: str, direction: str) -> Dict:
             vi_ver, en_ver = f_vi.result(), f_en.result()
             main_trans = f"Tiếng Việt:\n{vi_ver}\n\nTiếng Nga:\n{ru_ver}\n\nTiếng Anh:\n{en_ver}"
 
-    # Tự động chia 6 cách hoặc chia động từ cơ bản cho từ đơn tiếng Nga
-    morph = fallback_russian_morphology(ru_ver if len(ru_ver.split()) == 1 else source_text)
-
-    if direction == DIRECTION_OPTIONS[0]:
-        formal_vy_full = "Здравствуйте! Спасибо за информацию, я обязательно всё учту и выполню вовремя."
-        formal_note = "Xin chào! Cảm ơn vì thông tin, em nhất định sẽ lưu ý và hoàn thành đúng hạn."
-        casual_ty_full = "Привет! Понял, спасибо за инфу!"
-        casual_note = "Chào cậu! Mình hiểu rồi, cảm ơn vì thông tin nhé!"
-    else:
-        base_ru = ru_ver.strip()
-        f_vy = re.sub(r"\bты\b", "Вы", base_ru, flags=re.IGNORECASE)
-        f_vy = re.sub(r"\bтебя\b", "Вас", f_vy, flags=re.IGNORECASE)
-        f_vy = re.sub(r"\bтебе\b", "Вам", f_vy, flags=re.IGNORECASE)
-        f_vy = re.sub(r"\bпривет\b", "Здравствуйте", f_vy, flags=re.IGNORECASE)
-        formal_vy_full = f_vy if f_vy.lower().startswith(("здравствуйте", "добрый день", "уважаем")) else f"Здравствуйте! {f_vy}"
-        formal_note = "Dùng khi nhắn cho giảng viên, giáo sư hoặc văn phòng khoa (Деканат)."
-
-        c_ty = re.sub(r"\bВы\b", "ты", base_ru)
-        c_ty = re.sub(r"\bВас\b", "тебя", c_ty)
-        c_ty = re.sub(r"\bВам\b", "тебе", c_ty)
-        c_ty = re.sub(r"\bЗдравствуйте\b", "Привет", c_ty, flags=re.IGNORECASE)
-        casual_ty_full = c_ty if c_ty.lower().startswith(("привет", "слушай")) else f"Привет! {c_ty}"
-        casual_note = "Dùng khi nhắn cho bạn cùng lớp hoặc bạn cùng ký túc xá."
-
     vocab_list = [
         {"ru_accent": f"{s['accent']} ({s['full']})", "en": s["en"], "vi": s["vi"]}
         for s in detected_slang
     ]
     slang_explanations = [
-        {"term": s["word"], "full_form": s["full"], "meaning_vi": f"{s['vi']} — Ví dụ: «{s['example']}»"}
+        {"term": s["word"], "full_form": s["full"], "meaning_vi": f"{s['vi']} — VD: «{s['example']}»"}
         for s in detected_slang
+    ]
+    examples = [
+        {"context": "Tiếng lóng đại học", "ru": s["example"], "vi": s["vi"]}
+        for s in detected_slang[:2]
     ]
 
     return {
+        "input_kind": input_kind,
         "main_translation": main_trans,
         "ru_version": ru_ver,
         "vi_version": vi_ver,
         "en_version": en_ver,
-        "morphology": morph or {},
+        "morphology": {},
         "sentence_grammar": [],
+        "context_examples": examples,
         "slang_explanations": slang_explanations,
         "vocabulary_table": vocab_list,
-        "russian_reply_variants": {
-            "formal_vy": formal_vy_full,
-            "formal_vy_vi_note": formal_note,
-            "casual_ty": casual_ty_full,
-            "casual_ty_vi_note": casual_note,
-        },
-        "context_note": "Mở thanh bên trái và dán Gemini API Key (miễn phí) để xem bảng chia 6 cách chuẩn ngoại lệ, chia động từ đầy đủ thể НСВ/СВ và phân tích ngữ pháp chi tiết từng cụm trong câu dài.",
+        "context_note": "Nhập Gemini API Key (miễn phí) ở thanh bên trái để bật chia 6 cách / chia động từ chính xác (kể cả ngoại lệ), phân tích ngữ pháp câu dài và sinh ví dụ áp dụng theo ngữ cảnh.",
     }
 
 
 # ==============================================================================
-# 6. XỬ LÝ AUDIO NATIVE (ỔN ĐỊNH 100% TRÊN MỌI THIẾT BỊ) + TÓM TẮT BÀI GIẢNG AI
-# ==============================================================================
-AUDIO_MIME_MAP = {
-    ".wav": "audio/wav",
-    ".mp3": "audio/mp3",
-    ".m4a": "audio/mp4",
-    ".ogg": "audio/ogg",
-    ".webm": "audio/webm",
-}
-
-
-def boost_wav_audio_bytes(audio_bytes: bytes, max_gain_factor: float = 12.0) -> bytes:
-    """Chuẩn hóa âm lượng RMS Auto-Gain x12 + Pre-Emphasis giúp nghe rõ giọng giảng viên ở xa."""
-    try:
-        with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
-            params = wf.getparams()
-            frames = wf.readframes(params.nframes)
-            if params.sampwidth != 2:
-                return audio_bytes
-
-            samples = array("h")
-            samples.frombytes(frames)
-            n = len(samples)
-            if n == 0:
-                return audio_bytes
-
-            mean_val = sum(samples) / float(n)
-            skip = min(int(params.framerate * 0.08), n // 6)
-            core = samples[skip : n - skip] if (n - 2 * skip) > 200 else samples
-            rms = math.sqrt(sum((x - mean_val) ** 2 for x in core) / max(1, len(core)))
-            auto_gain = min(max_gain_factor, max(1.8, 6500.0 / rms)) if rms > 1.0 else max_gain_factor
-
-            prev = 0.0
-            for i in range(n):
-                cur = float(samples[i]) - mean_val
-                boosted = (cur - 0.22 * prev) * auto_gain
-                prev = cur
-                if boosted > 29000.0:
-                    boosted = 29000.0 + 3767.0 * math.tanh((boosted - 29000.0) / 8000.0)
-                elif boosted < -29000.0:
-                    boosted = -29000.0 + 3767.0 * math.tanh((boosted + 29000.0) / 8000.0)
-                samples[i] = int(max(-32768, min(32767, boosted)))
-
-        out_io = io.BytesIO()
-        with wave.open(out_io, "wb") as out_wf:
-            out_wf.setparams(params)
-            out_wf.writeframes(samples.tobytes())
-        return out_io.getvalue()
-    except Exception:
-        return audio_bytes
-
-
-def transcribe_and_translate_audio_bytes(
-    audio_bytes: bytes,
-    source_lang_speech: str,
-    target_lang_trans: str,
-    gemini_api_key: str = "",
-    file_ext: str = ".wav",
-    recent_context: Optional[List[Dict[str, str]]] = None,
-) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    ext = file_ext.lower()
-    mime_type = AUDIO_MIME_MAP.get(ext, "audio/wav")
-    processed = boost_wav_audio_bytes(audio_bytes, max_gain_factor=12.0) if ext == ".wav" else audio_bytes
-
-    if clean_api_key(gemini_api_key):
-        b64_audio = base64.b64encode(processed).decode("utf-8")
-        ctx_str = ""
-        if recent_context:
-            ctx_lines = [f"- {c['source']} -> {c['translation']}" for c in recent_context[-3:]]
-            ctx_str = "Ngữ cảnh các đoạn giảng ngay trước đó:\n" + "\n".join(ctx_lines) + "\n\n"
-        prompt = (
-            f"{ctx_str}"
-            f'Nghe file âm thanh (ngôn ngữ gốc: {source_lang_speech}), chép lại chính xác toàn bộ lời nói '
-            f'và dịch chuẩn xác, liền mạch theo ngữ cảnh sang "{target_lang_trans}". '
-            'Chỉ trả về JSON: {"transcript": "...", "translation": "..."}'
-        )
-        raw, _ = call_gemini_multimodal_rest(
-            api_key=gemini_api_key,
-            parts=[{"text": prompt}, {"inlineData": {"mimeType": mime_type, "data": b64_audio}}],
-            expect_json=True, temperature=0.1, timeout_sec=35,
-        )
-        if raw:
-            try:
-                parsed = _parse_json_response(raw)
-                if parsed and str(parsed.get("transcript", "")).strip():
-                    tr = str(parsed["transcript"]).strip()
-                    tl = str(parsed.get("translation", "")).strip() or fast_free_translate(tr, source_lang_speech.split("-")[0], target_lang_trans)
-                    return tr, tl, None
-            except Exception:
-                pass
-
-    if ext != ".wav":
-        return None, None, f"Định dạng {ext} cần nhập Gemini API Key ở thanh bên trái, hoặc dùng nút Thu âm trực tiếp (định dạng WAV) ngay phía trên."
-
-    if sr is None:
-        return None, None, "Thiếu thư viện SpeechRecognition trong requirements.txt."
-
-    recognizer = sr.Recognizer()
-    recognizer.energy_threshold = 20
-    recognizer.dynamic_energy_threshold = False
-    last_err = None
-    for wav_data in (processed, audio_bytes):
-        try:
-            with sr.AudioFile(io.BytesIO(wav_data)) as source:
-                audio_data = recognizer.record(source)
-            tr = recognizer.recognize_google(audio_data, language=source_lang_speech)
-            if tr and tr.strip():
-                tl = fast_free_translate(tr, source_lang_speech.split("-")[0], target_lang_trans)
-                return tr, tl, None
-        except sr.UnknownValueError:
-            last_err = "Chưa nghe rõ lời nói trong đoạn thu âm. Hãy nói gần Mic hơn, kiểm tra đúng ngôn ngữ đang chọn, hoặc thêm Gemini API Key để tăng độ nhạy."
-        except Exception as exc:
-            last_err = f"Không thể xử lý âm thanh: {exc}"
-    return None, None, last_err
-
-
-def summarize_lecture_notes_ai(api_key: str, notes: List[Dict[str, str]]) -> Tuple[Optional[str], Optional[str]]:
-    if not clean_api_key(api_key):
-        return None, "Cần nhập Gemini API Key (miễn phí) ở thanh bên trái để tóm tắt bài giảng bằng AI."
-    joined = "\n".join(f"{i+1}. {n['source']} ({n['translation']})" for i, n in enumerate(notes))
-    prompt = (
-        "Bạn là trợ lý học tập cho sinh viên Việt Nam tại Nga.\n"
-        "Hãy tóm tắt nội dung bài giảng sau đây thật mạch lạc bằng tiếng Việt gồm:\n"
-        "1. Các ý chính cốt lõi cần nhớ (gạch đầu dòng ngắn gọn).\n"
-        "2. Danh sách thuật ngữ tiếng Nga – tiếng Việt quan trọng nhất xuất hiện trong bài.\n\n"
-        f"Nội dung bài giảng:\n{joined[:14000]}"
-    )
-    return call_gemini_multimodal_rest(
-        api_key=api_key,
-        parts=[{"text": prompt}],
-        expect_json=False,
-        temperature=0.25,
-        timeout_sec=30,
-    )
-
-
-def build_live_speech_fallback_component(gemini_api_key: str = "") -> str:
-    """Chế độ nghe trực tiếp liên tục bằng Web Speech API (chỉ dùng trên trình duyệt cho phép mic trong iframe)."""
-    safe_key = json.dumps(clean_api_key(gemini_api_key))
-    return f"""
-    <!DOCTYPE html>
-    <html lang="vi">
-    <head>
-        <meta charset="UTF-8" />
-        <style>
-            * {{ box-sizing: border-box; font-family: 'Inter', -apple-system, sans-serif; }}
-            body {{ margin: 0; padding: 2px; background: transparent; color: #18181B; }}
-            .box {{ background: #FFFFFF; border: 1px solid #E5E4DF; border-radius: 10px; padding: 14px; }}
-            .row {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }}
-            select, button {{ padding: 6px 11px; border-radius: 8px; border: 1px solid #D4D4D8; background: #FFFFFF; color: #18181B; font-size: 13px; cursor: pointer; }}
-            button.pri {{ background: #18181B; color: #FFFFFF; border-color: #18181B; font-weight: 600; }}
-            .st {{ font-size: 13px; color: #52525B; margin-bottom: 8px; }}
-            .out {{ max-height: 220px; overflow-y: auto; border: 1px solid #E5E4DF; border-radius: 8px; padding: 10px; background: #FAF9F6; font-size: 14px; line-height: 1.55; }}
-        </style>
-    </head>
-    <body>
-        <div class="box">
-            <div class="row">
-                <select id="sl"><option value="ru-RU">Tiếng Nga</option><option value="vi-VN">Tiếng Việt</option><option value="en-US">Tiếng Anh</option></select>
-                <select id="tl"><option value="vi">→ Tiếng Việt</option><option value="ru">→ Tiếng Nga</option><option value="en">→ Tiếng Anh</option></select>
-                <button class="pri" id="bStart" onclick="startLive()">Bắt đầu nghe liên tục</button>
-                <button id="bStop" onclick="stopLive()" disabled>Dừng</button>
-            </div>
-            <div id="status" class="st">Sẵn sàng. Nếu trình duyệt chặn quyền Mic ở chế độ này, hãy dùng nút <b>Thu âm trực tiếp</b> ở ngay phía trên (hoạt động ổn định 100%).</div>
-            <div id="out" class="out">Chưa có nội dung...</div>
-        </div>
-        <script>
-            const KEY = {safe_key};
-            let rec = null, on = false, lines = [];
-            function escH(s) {{ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }}
-            async function trans(t, s, tg) {{
-                const ss = s.split("-")[0];
-                if (ss === tg) return t;
-                try {{
-                    const r = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${{ss}}&tl=${{tg}}&dt=t&q=${{encodeURIComponent(t)}}`);
-                    const d = await r.json();
-                    if (Array.isArray(d) && Array.isArray(d[0])) return d[0].map(x => x[0]).join("");
-                }} catch(e) {{}}
-                return t;
-            }}
-            function startLive() {{
-                const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-                if (!SR) {{
-                    document.getElementById("status").innerText = "Trình duyệt này không hỗ trợ Web Speech API. Vui lòng dùng nút Thu âm trực tiếp phía trên.";
-                    return;
-                }}
-                on = true;
-                document.getElementById("bStart").disabled = true;
-                document.getElementById("bStop").disabled = false;
-                rec = new SR();
-                rec.lang = document.getElementById("sl").value;
-                rec.continuous = true; rec.interimResults = false;
-                rec.onstart = () => {{ document.getElementById("status").innerText = "Đang nghe trực tiếp..."; }};
-                rec.onresult = async (ev) => {{
-                    const txt = (ev.results[ev.results.length - 1][0]?.transcript || "").trim();
-                    if (!txt) return;
-                    const tr = await trans(txt, rec.lang, document.getElementById("tl").value);
-                    lines.push(`<div><b>Gốc:</b> ${{escH(txt)}}<br/><b>Dịch:</b> ${{escH(tr)}}</div><hr style="border:none;border-top:1px solid #E5E4DF;margin:8px 0;"/>`);
-                    const out = document.getElementById("out");
-                    out.innerHTML = lines.join("");
-                    out.scrollTop = out.scrollHeight;
-                }};
-                rec.onerror = (ev) => {{
-                    document.getElementById("status").innerText = "Trình duyệt chặn Mic trong khung phụ (" + ev.error + "). Hãy dùng nút Thu âm trực tiếp ở ngay phía trên!";
-                    stopLive();
-                }};
-                rec.onend = () => {{ if (on) {{ try {{ rec.start(); }} catch(e) {{}} }} }};
-                try {{ rec.start(); }} catch(e) {{
-                    document.getElementById("status").innerText = "Không mở được Mic trực tiếp. Hãy dùng nút Thu âm trực tiếp ở phía trên.";
-                    stopLive();
-                }}
-            }}
-            function stopLive() {{
-                on = false;
-                try {{ rec?.stop(); }} catch(e) {{}}
-                document.getElementById("bStart").disabled = false;
-                document.getElementById("bStop").disabled = true;
-            }}
-        </script>
-    </body>
-    </html>
-    """
-
-
-# ==============================================================================
-# 7. CẨM NANG KIẾN THỨC HỌC TIẾNG NGA KHOA HỌC (TAB 3)
+# 6. CẨM NANG KIẾN THỨC TIẾNG NGA CHI TIẾT & KHOA HỌC (TAB 3)
 # ==============================================================================
 def render_russian_knowledge_hub() -> None:
     topic = st.radio(
-        "Chọn chuyên đề ngữ pháp",
+        "Chọn chuyên đề",
         options=[
-            "6 Cách (Падежи)",
-            "Động từ & Thể (НСВ / СВ)",
-            "Động từ chuyển động",
-            "Giới từ В / НА & Thời gian",
-            "Mẫu câu Đại học & Visa",
+            "1. 6 Cách · Danh từ",
+            "2. Tính từ & Đại từ",
+            "3. Động từ & Thể (НСВ/СВ)",
+            "4. Động từ chuyển động",
+            "5. Giới từ & Thời gian",
+            "6. Số từ & Lượng từ",
+            "7. Câu ghép & Từ nối",
         ],
         horizontal=True,
         label_visibility="collapsed",
     )
 
-    if topic == "6 Cách (Падежи)":
+    if topic == "1. 6 Cách · Danh từ":
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Tổng quan 6 cách trong tiếng Nga (Падежи)</span><span>Nền tảng bắt buộc</span></div>
+                <div class="clean-label"><span>Tổng quan 6 cách trong tiếng Nga (Падежи)</span><span>Nền tảng cốt lõi</span></div>
                 <table class="clean-table">
                     <thead>
-                        <tr><th>Cách</th><th>Câu hỏi</th><th>Chức năng chính</th><th>Giới từ hay gặp</th><th>Ví dụ (студе́нт / кни́га)</th></tr>
+                        <tr><th>Cách</th><th>Câu hỏi</th><th>Chức năng chính</th><th>Giới từ hay gặp</th><th>Ví dụ</th></tr>
                     </thead>
                     <tbody>
-                        <tr><td><b>1. Именительный</b><br/>(Nguyên cách)</td><td>Кто? Что?</td><td>Chủ ngữ của câu, dạng gốc trong từ điển</td><td>Không có giới từ</td><td><b>Студе́нт</b> чита́ет. <b>Кни́га</b> на столе́.</td></tr>
-                        <tr><td><b>2. Родительный</b><br/>(Sở hữu cách)</td><td>Кого́? Чего́?</td><td>Sở hữu (của ai), phủ định (нет), số lượng (2,3,4,5), xuất phát (из/от)</td><td>у, без, до, из, с, от, о́коло, по́сле, для</td><td>Нет <b>студе́нта</b>. Страни́ца <b>кни́ги</b>.</td></tr>
-                        <tr><td><b>3. Дательный</b><br/>(Tặng cách)</td><td>Кому́? Чему́?</td><td>Đối tượng nhận hành động (cho ai), tuổi tác, cảm xúc (мне холодно)</td><td>к, по</td><td>Я звоню́ <b>студе́нту</b>. Иду́ к <b>преподава́телю</b>.</td></tr>
-                        <tr><td><b>4. Винительный</b><br/>(Đối cách)</td><td>Кого́? Что?</td><td>Tân ngữ trực tiếp (đọc gì, gặp ai), hướng chuyển động (куда?), thứ trong tuần</td><td>в, на (hướng đi), че́рез, за</td><td>Я чита́ю <b>кни́гу</b>. Я ви́жу <b>студе́нта</b>.</td></tr>
-                        <tr><td><b>5. Творительный</b><br/>(Công cụ cách)</td><td>Кем? Чем?</td><td>Công cụ (bằng gì), đi cùng ai (с кем?), nghề nghiệp (быть/стать/работать)</td><td>с, над, под, пе́ред, за, ме́жду</td><td>Пишу́ <b>ру́чкой</b>. Разгова́риваю со <b>студе́нтом</b>.</td></tr>
-                        <tr><td><b>6. Предложный</b><br/>(Giới cách)</td><td>О ком? О чём? Где?</td><td>Vị trí tĩnh (ở đâu?), chủ đề nói/nghĩ về ai/cái gì, phương tiện (на метро)</td><td>в, на (ở đâu), о (об), при</td><td>Учу́сь в <b>университе́те</b>. Ду́маю о <b>кни́ге</b>.</td></tr>
+                        <tr><td><b>1. Именительный</b><br/>Nguyên cách</td><td>Кто? Что?</td><td>Chủ ngữ, định nghĩa, dạng gốc trong từ điển</td><td>Không có</td><td><b>Студе́нт</b> у́чится. <b>Кни́га</b> на столе́.</td></tr>
+                        <tr><td><b>2. Родительный</b><br/>Sở hữu cách</td><td>Кого́? Чего́?</td><td>Sở hữu (của ai), phủ định (нет), số lượng (2–4 số ít; ≥5 số nhiều), nơi xuất phát</td><td>у, без, до, из, с, от, о́коло, по́сле, для, кро́ме, во вре́мя</td><td>Нет <b>вре́мени</b>. Два <b>студе́нта</b>. Из <b>Росси́и</b>.</td></tr>
+                        <tr><td><b>3. Дательный</b><br/>Tặng cách</td><td>Кому́? Чему́?</td><td>Người nhận (cho ai), tuổi tác, trạng thái/cảm xúc (мне ну́жно), đối tượng hướng tới</td><td>к, по, благодаря́, вопреки́</td><td>Помога́ю <b>дру́гу</b>. <b>Мне</b> 21 год. По <b>пла́ну</b>.</td></tr>
+                        <tr><td><b>4. Винительный</b><br/>Đối cách</td><td>Кого́? Что?</td><td>Tân ngữ trực tiếp (đọc gì, gặp ai), hướng chuyển động (куда́?), thứ trong tuần, thời lượng</td><td>в, на (hướng đi), че́рез, за, про</td><td>Чита́ю <b>кни́гу</b>. Иду́ в <b>университе́т</b>. В <b>сре́ду</b>.</td></tr>
+                        <tr><td><b>5. Творительный</b><br/>Công cụ cách</td><td>Кем? Чем?</td><td>Công cụ (bằng gì), đi cùng ai (с кем?), nghề nghiệp (стать/рабо́тать), bị động</td><td>с, над, под, пе́ред, за, ме́жду</td><td>Пишу́ <b>ру́чкой</b>. Ко́фе с <b>молоко́м</b>. Ста́ну <b>инжене́ром</b>.</td></tr>
+                        <tr><td><b>6. Предложный</b><br/>Giới cách</td><td>О ком? О чём? Где?</td><td>Vị trí tĩnh (ở đâu?), chủ đề (nói/nghĩ về gì), tháng/năm, phương tiện (на метро́)</td><td>в, на (vị trí), о (об), при</td><td>Живу́ в <b>Петербу́рге</b>. Ду́маю об <b>экза́мене</b>.</td></tr>
                     </tbody>
                 </table>
             </div>
 
             <div class="clean-card">
-                <div class="clean-label"><span>Bảng đuôi biến cách Danh từ số ít (Quy tắc nhanh)</span></div>
+                <div class="clean-label"><span>Bảng đuôi Danh từ Số ít (Единственное число)</span></div>
                 <table class="clean-table">
-                    <thead>
-                        <tr><th>Cách</th><th>Giống đực (phụ âm / -й / -ь)</th><th>Giống cái (-а / -я / -ь)</th><th>Giống trung (-о / -е)</th></tr>
-                    </thead>
+                    <thead><tr><th>Cách</th><th>Giống đực (ø / -й / -ь)</th><th>Giống cái (-а / -я / -ь)</th><th>Giống trung (-о / -е / -ие)</th></tr></thead>
                     <tbody>
-                        <tr><td><b>Cách 1</b></td><td>ø / -й / -ь</td><td>-а / -я / -ь</td><td>-о / -е</td></tr>
-                        <tr><td><b>Cách 2</b></td><td>-а / -я / -я</td><td>-ы (-и) / -и / -и</td><td>-а / -я</td></tr>
-                        <tr><td><b>Cách 3</b></td><td>-у / -ю / -ю</td><td>-е / -е (-и với -ия) / -и</td><td>-у / -ю</td></tr>
-                        <tr><td><b>Cách 4</b></td><td>Vật = C1 · Người = C2</td><td>-у / -ю / -ь</td><td>Giống Cách 1 (-о / -е)</td></tr>
-                        <tr><td><b>Cách 5</b></td><td>-ом / -ем / -ем</td><td>-ой / -ей / -ью</td><td>-ом / -ем</td></tr>
-                        <tr><td><b>Cách 6</b></td><td>-е (với -ий → -ии)</td><td>-е (với -ия/-ь → -ии/-и)</td><td>-е (với -ие → -ии)</td></tr>
+                        <tr><td><b>1</b></td><td>ø / -й / -ь</td><td>-а / -я / -ь</td><td>-о / -е / -ие</td></tr>
+                        <tr><td><b>2</b></td><td>-а / -я / -я</td><td>-ы (-и) / -и / -и</td><td>-а / -я / -ия</td></tr>
+                        <tr><td><b>3</b></td><td>-у / -ю / -ю</td><td>-е / -е (-и với -ия) / -и</td><td>-у / -ю / -ию</td></tr>
+                        <tr><td><b>4</b></td><td>Vật = C1 · Người = C2</td><td>-у / -ю / -ь</td><td>Giống Cách 1 (-о / -е / -ие)</td></tr>
+                        <tr><td><b>5</b></td><td>-ом / -ем / -ем</td><td>-ой / -ей / -ью</td><td>-ом / -ем / -ием</td></tr>
+                        <tr><td><b>6</b></td><td>-е (-ии với -ий)</td><td>-е (-ии với -ия; -и với -ь)</td><td>-е (-ии với -ие)</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="clean-card">
+                <div class="clean-label"><span>Bảng đuôi Danh từ Số nhiều (Множественное число)</span><span>Chú ý Cách 2 số nhiều</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách</th><th>Đuôi số nhiều phổ biến</th><th>Ví dụ (студе́нты · кни́ги · общежи́тия)</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1</b></td><td>-ы / -и (Đực, Cái) · -а / -я (Trung)</td><td>студе́нты, кни́ги, окна́, общежи́тия</td></tr>
+                        <tr><td><b>2</b></td><td><b>-ов / -ев</b> (Đực cứng/-й) · <b>-ей</b> (đuôi -ь, ж/ш/ч/щ) · <b>ø</b> (bỏ đuôi -а/-о) · <b>-ий</b> (từ -ия/-ие)</td><td>студе́нт<b>ов</b>, враче́<b>й</b>, книг<b>ø</b>, окон<b>ø</b>, общежи́т<b>ий</b></td></tr>
+                        <tr><td><b>3</b></td><td>-ам / -ям</td><td>студе́нтам, кни́гам, общежи́тиям</td></tr>
+                        <tr><td><b>4</b></td><td>Vật = Cách 1 số nhiều · Người = Cách 2 số nhiều</td><td>чита́ю кни́ги · ви́жу студе́нтов</td></tr>
+                        <tr><td><b>5</b></td><td>-ами / -ями</td><td>студе́нтами, кни́гами, общежи́тиями</td></tr>
+                        <tr><td><b>6</b></td><td>-ах / -ях</td><td>о студе́нтах, в кни́гах, в общежи́тиях</td></tr>
                     </tbody>
                 </table>
                 <div class="note-callout">
-                    <b>Quy tắc 7 chữ cái (г, к, х, ж, ч, ш, щ):</b> Sau 7 phụ âm này <b>không bao giờ viết «ы»</b> mà luôn đổi thành <b>«и»</b> (VD: кни́га → кни́ги, студе́нтка → студе́нтки).
+                    <b>2 quy tắc chính tả bắt buộc nhớ:</b><br/>
+                    • <b>Quy tắc 7 chữ cái (г, к, х, ж, ч, ш, щ):</b> Sau 7 âm này không viết <b>«ы»</b>, luôn viết <b>«и»</b> (кни́га → кни́ги).<br/>
+                    • <b>Quy tắc 5 chữ cái (ж, ч, ш, щ, ц):</b> Nếu không có trọng âm thì viết <b>«е»</b> thay vì <b>«о»</b> (това́рищем, хоро́шего).
                 </div>
             </div>
             """
         )
 
-    elif topic == "Động từ & Thể (НСВ / СВ)":
+    elif topic == "2. Tính từ & Đại từ":
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Hai nhóm chia động từ ở thì Hiện tại / Tương lai đơn</span></div>
+                <div class="clean-label"><span>Biến cách Tính từ theo 6 cách (Прилагательные)</span><span>VD: но́вый (cứng) / си́ний (mềm)</span></div>
                 <table class="clean-table">
-                    <thead>
-                        <tr><th>Ngôi</th><th>Nhóm I (đa số -ать, -ять, -еть · VD: чита́ть)</th><th>Nhóm II (đa số -ить · VD: говори́ть)</th></tr>
-                    </thead>
+                    <thead><tr><th>Cách</th><th>Giống đực</th><th>Giống trung</th><th>Giống cái</th><th>Số nhiều (cả 3 giống)</th></tr></thead>
                     <tbody>
-                        <tr><td><b>я</b> (tôi)</td><td>-у / -ю (чита́ю)</td><td>-у / -ю (говорю́)</td></tr>
-                        <tr><td><b>ты</b> (bạn)</td><td>-ешь / -ёшь (чита́ешь)</td><td>-ишь (говори́шь)</td></tr>
+                        <tr><td><b>1</b></td><td>-ый / -ой / -ий</td><td>-ое / -ее</td><td>-ая / -яя</td><td>-ые / -ие</td></tr>
+                        <tr><td><b>2</b></td><td>-ого / -его</td><td>-ого / -его</td><td>-ой / -ей</td><td>-ых / -их</td></tr>
+                        <tr><td><b>3</b></td><td>-ому / -ему</td><td>-ому / -ему</td><td>-ой / -ей</td><td>-ым / -им</td></tr>
+                        <tr><td><b>4</b></td><td>Vật = C1 · Người = C2</td><td>-ое / -ее</td><td>-ую / -юю</td><td>Vật = C1 · Người = C2</td></tr>
+                        <tr><td><b>5</b></td><td>-ым / -им</td><td>-ым / -им</td><td>-ой / -ей</td><td>-ыми / -ими</td></tr>
+                        <tr><td><b>6</b></td><td>-ом / -ем</td><td>-ом / -ем</td><td>-ой / -ей</td><td>-ых / -их</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="clean-card">
+                <div class="clean-label"><span>6 Cách của Đại từ nhân xưng (Личные местоимения)</span><span>Dùng hàng ngày</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách</th><th>я</th><th>ты</th><th>он / оно́</th><th>она́</th><th>мы</th><th>вы</th><th>они́</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1</b></td><td>я</td><td>ты</td><td>он / оно́</td><td>она́</td><td>мы</td><td>вы</td><td>они́</td></tr>
+                        <tr><td><b>2</b></td><td>меня́</td><td>тебя́</td><td>его́ (него́)</td><td>её (неё)</td><td>нас</td><td>вас</td><td>их (них)</td></tr>
+                        <tr><td><b>3</b></td><td>мне</td><td>тебе́</td><td>ему́ (нему́)</td><td>ей (ней)</td><td>нам</td><td>вам</td><td>им (ним)</td></tr>
+                        <tr><td><b>4</b></td><td>меня́</td><td>тебя́</td><td>его́ (него́)</td><td>её (неё)</td><td>нас</td><td>вас</td><td>их (них)</td></tr>
+                        <tr><td><b>5</b></td><td>мной</td><td>тобо́й</td><td>им (ним)</td><td>ей (ней)</td><td>на́ми</td><td>ва́ми</td><td>и́ми (ни́ми)</td></tr>
+                        <tr><td><b>6</b></td><td>обо мне</td><td>о тебе́</td><td>о нём</td><td>о ней</td><td>о нас</td><td>о вас</td><td>о них</td></tr>
+                    </tbody>
+                </table>
+                <div class="note-callout">
+                    <b>Lưu ý thêm chữ «н-»:</b> Với đại từ ngôi 3 (<b>он, она́, оно́, они́</b>), khi đứng ngay sau giới từ luôn thêm <b>н-</b> phía trước (VD: у <b>него́</b>, к <b>ней</b>, с <b>ни́ми</b>).
+                </div>
+            </div>
+            """
+        )
+
+    elif topic == "3. Động từ & Thể (НСВ/СВ)":
+        render_html(
+            """
+            <div class="clean-card">
+                <div class="clean-label"><span>Quy tắc chia động từ Hiện tại / Tương lai đơn</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Ngôi</th><th>Nhóm I (đa số -ать, -ять, -еть · чита́ть)</th><th>Nhóm II (đa số -ить · говори́ть)</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>я</b></td><td>-у / -ю (чита́ю)</td><td>-у / -ю (говорю́)</td></tr>
+                        <tr><td><b>ты</b></td><td>-ешь / -ёшь (чита́ешь)</td><td>-ишь (говори́шь)</td></tr>
                         <tr><td><b>он / она́ / оно́</b></td><td>-ет / -ёт (чита́ет)</td><td>-ит (говори́т)</td></tr>
-                        <tr><td><b>мы</b> (chúng tôi)</td><td>-ем / -ём (чита́ем)</td><td>-им (говори́м)</td></tr>
-                        <tr><td><b>вы</b> (ngài / các bạn)</td><td>-ете / -ёте (чита́ете)</td><td>-ите (говори́те)</td></tr>
-                        <tr><td><b>они́</b> (họ)</td><td>-ут / -ют (чита́ют)</td><td>-ат / -ят (говоря́т)</td></tr>
+                        <tr><td><b>мы</b></td><td>-ем / -ём (чита́ем)</td><td>-им (говори́м)</td></tr>
+                        <tr><td><b>вы</b></td><td>-ете / -ёте (чита́ете)</td><td>-ите (говори́те)</td></tr>
+                        <tr><td><b>они́</b></td><td>-ут / -ют (чита́ют)</td><td>-ат / -ят (говоря́т)</td></tr>
                     </tbody>
                 </table>
                 <div class="note-callout">
-                    <b>Thì quá khứ (rất dễ):</b> Bỏ <b>-ть</b>, thêm <b>-л</b> (giống đực), <b>-ла</b> (giống cái), <b>-ло</b> (giống trung), <b>-ли</b> (số nhiều). VD: чита́ть → чита́л, чита́ла, чита́ли.
+                    <b>Biến âm phụ âm hay gặp ở ngôi «я» (Nhóm II):</b> <b>д → ж</b> (ви́деть → ви́жу), <b>т → ч</b> (плати́ть → плачу́), <b>с → ш</b> (писа́ть → пишу́), <b>б/п/в/м → бл/пл/вл/мл</b> (люби́ть → люблю́, гото́вить → гото́влю).<br/>
+                    <b>Thì quá khứ:</b> Bỏ <b>-ть</b>, thêm <b>-л / -ла / -ло / -ли</b> theo giống/số của chủ ngữ.
                 </div>
             </div>
 
             <div class="clean-card">
-                <div class="clean-label"><span>Phân biệt Thể Chưa Hoàn Thành (НСВ) và Thể Hoàn Thành (СВ)</span></div>
+                <div class="clean-label"><span>Phân biệt Thể Chưa Hoàn Thành (НСВ) & Thể Hoàn Thành (СВ)</span></div>
                 <table class="clean-table">
-                    <thead>
-                        <tr><th>Tiêu chí</th><th>НСВ (Несовершенный вид)</th><th>СВ (Совершенный вид)</th></tr>
-                    </thead>
+                    <thead><tr><th>Tiêu chí</th><th>НСВ (Несовершенный вид)</th><th>СВ (Совершенный вид)</th></tr></thead>
                     <tbody>
-                        <tr><td><b>Ý nghĩa cốt lõi</b></td><td>Quá trình đang diễn ra, hành động lặp lại nhiều lần, nêu sự kiện chung</td><td>Kết quả đã hoàn tất, hành động xảy ra 1 lần dứt điểm</td></tr>
+                        <tr><td><b>Bản chất</b></td><td>Quá trình, hành động lặp lại, thói quen, nêu sự thật chung</td><td>Kết quả đã hoàn tất, hành động xảy ra 1 lần dứt điểm</td></tr>
                         <tr><td><b>Từ dấu hiệu</b></td><td>ка́ждый день, ча́сто, обы́чно, до́лго, всегда́</td><td>уже́, наконе́ц, вдруг, сра́зу, за (2 часа́)</td></tr>
-                        <tr><td><b>Thì sử dụng</b></td><td>Quá khứ · Hiện tại · Tương lai (бу́ду + nguyên thể)</td><td>Quá khứ · Tương lai đơn (chia trực tiếp, <b>không có Hiện tại</b>)</td></tr>
-                        <tr><td><b>Cặp sinh viên hay dùng</b></td><td>писа́ть, сдава́ть, учи́ть, реша́ть, понима́ть</td><td>написа́ть, сдать, вы́учить, реши́ть, поня́ть</td></tr>
+                        <tr><td><b>Các thì</b></td><td>Quá khứ · Hiện tại · Tương lai (бу́ду + nguyên thể)</td><td>Quá khứ · Tương lai đơn (chia trực tiếp, <b>không có Hiện tại</b>)</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="clean-card">
+                <div class="clean-label"><span>12 cặp động từ НСВ / СВ sinh viên dùng nhiều nhất</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>НСВ (Quá trình)</th><th>СВ (Kết quả)</th><th>Nghĩa tiếng Việt</th></tr></thead>
+                    <tbody>
+                        <tr><td>сдава́ть</td><td>сдать</td><td>Nộp bài / thi (сдал экза́мен = đã qua môn)</td></tr>
+                        <tr><td>писа́ть</td><td>написа́ть</td><td>Viết</td></tr>
+                        <tr><td>учи́ть</td><td>вы́учить</td><td>Học / học thuộc</td></tr>
+                        <tr><td>реша́ть</td><td>реши́ть</td><td>Giải bài / quyết định</td></tr>
+                        <tr><td>понима́ть</td><td>поня́ть</td><td>Hiểu</td></tr>
+                        <tr><td>отправля́ть</td><td>отпра́вить</td><td>Gửi (email, tài liệu)</td></tr>
+                        <tr><td>получа́ть</td><td>получи́ть</td><td>Nhận (học bổng, giấy tờ)</td></tr>
+                        <tr><td>переводи́ть</td><td>перевести́</td><td>Dịch thuật</td></tr>
+                        <tr><td>проверя́ть</td><td>прове́рить</td><td>Kiểm tra / chấm bài</td></tr>
+                        <tr><td>объясня́ть</td><td>объясни́ть</td><td>Giải thích</td></tr>
+                        <tr><td>забыва́ть</td><td>забы́ть</td><td>Quên</td></tr>
+                        <tr><td>продлева́ть</td><td>продли́ть</td><td>Gia hạn (visa, tạm trú)</td></tr>
                     </tbody>
                 </table>
             </div>
             """
         )
 
-    elif topic == "Động từ chuyển động":
+    elif topic == "4. Động từ chuyển động":
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Động từ chuyển động (Глаголы движения)</span><span>Đi bộ & Phương tiện</span></div>
+                <div class="clean-label"><span>Bảng Động từ chuyển động cơ bản (không tiền tố)</span></div>
                 <table class="clean-table">
-                    <thead>
-                        <tr><th>Nghĩa</th><th>Một hướng / Đang đi (1 chiều)</th><th>Khứ hồi / Lặp lại / Thói quen</th><th>Ví dụ</th></tr>
-                    </thead>
+                    <thead><tr><th>Nghĩa</th><th>1 hướng / Đang diễn ra</th><th>Khứ hồi / Lặp lại / Thói quen</th><th>Ví dụ</th></tr></thead>
                     <tbody>
-                        <tr><td><b>Đi bộ</b></td><td><b>идти́</b> (иду́, идёшь, иду́т)</td><td><b>ходи́ть</b> (хожу́, хо́дишь, хо́дят)</td><td>Сейча́с я <b>иду́</b> в корпус. Я ка́ждый день <b>хожу́</b> на па́ры.</td></tr>
-                        <tr><td><b>Đi bằng xe / tàu</b></td><td><b>е́хать</b> (е́ду, е́дешь, е́дут)</td><td><b>е́здить</b> (е́зжу, е́здишь, е́здят)</td><td>Мы <b>е́дем</b> на метро́. Ле́том я <b>е́зжу</b> домо́й.</td></tr>
-                        <tr><td><b>Mang theo (đi bộ)</b></td><td><b>нести́</b></td><td><b>носи́ть</b></td><td>Я <b>несу́</b> чертёж преподава́телю.</td></tr>
-                        <tr><td><b>Bay</b></td><td><b>лете́ть</b></td><td><b>лета́ть</b></td><td>Самолёт <b>лети́т</b> в Москву́.</td></tr>
+                        <tr><td><b>Đi bộ</b></td><td>идти́ (иду́, идёшь)</td><td>ходи́ть (хожу́, хо́дишь)</td><td>Сейча́с иду́ в корпус. Ка́ждый день хожу́ на па́ры.</td></tr>
+                        <tr><td><b>Đi bằng phương tiện</b></td><td>е́хать (е́ду, е́дешь)</td><td>е́здить (е́зжу, е́здишь)</td><td>Е́ду на метро́. Ча́сто е́зжу в центр.</td></tr>
+                        <tr><td><b>Chạy</b></td><td>бежа́ть</td><td>бе́гать</td><td>Бегу́ на пе́рвую па́ру!</td></tr>
+                        <tr><td><b>Mang (đi bộ)</b></td><td>нести́</td><td>носи́ть</td><td>Несу́ чертёж преподава́телю.</td></tr>
+                        <tr><td><b>Chở (bằng xe)</b></td><td>везти́</td><td>вози́ть</td><td>Авто́бус везёт студе́нтов.</td></tr>
+                        <tr><td><b>Dẫn / lái</b></td><td>вести́</td><td>води́ть</td><td>Он во́дит маши́ну.</td></tr>
+                        <tr><td><b>Bay</b></td><td>лете́ть</td><td>лета́ть</td><td>Лечу́ во Вьетна́м ле́том.</td></tr>
                     </tbody>
                 </table>
             </div>
 
             <div class="clean-card">
-                <div class="clean-label"><span>Tiền tố hay gặp nhất với động từ chuyển động</span></div>
+                <div class="clean-label"><span>10 Tiền tố không gian thường gặp nhất</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Tiền tố</th><th>Nghĩa</th><th>Ví dụ thực tế</th></tr></thead>
+                    <thead><tr><th>Tiền tố</th><th>Nghĩa</th><th>Giới từ + Cách đi kèm</th><th>Ví dụ</th></tr></thead>
                     <tbody>
-                        <tr><td><b>при-</b></td><td>Đến nơi</td><td>прийти́ / прие́хать (đến trường, đến Nga)</td></tr>
-                        <tr><td><b>у-</b></td><td>Rời đi hẳn</td><td>уйти́ / уе́хать (rời khỏi phòng, về nước)</td></tr>
-                        <tr><td><b>в- / во-</b></td><td>Đi vào trong</td><td>войти́ в аудито́рию (vào giảng đường)</td></tr>
-                        <tr><td><b>вы-</b></td><td>Đi ra ngoài</td><td>вы́йти из метро́ (ra khỏi ga tàu điện ngầm)</td></tr>
-                        <tr><td><b>пере-</b></td><td>Đi ngang qua / chuyển</td><td>перейти́ у́лицу (sang đường), перевести́ (dịch)</td></tr>
-                        <tr><td><b>под-</b></td><td>Tiến lại gần</td><td>подойти́ к преподава́телю (lại gần giảng viên)</td></tr>
+                        <tr><td><b>при-</b></td><td>Đến nơi</td><td>в/на + C4 · к + C3</td><td>прийти́ в декана́т (đến văn phòng khoa)</td></tr>
+                        <tr><td><b>у-</b></td><td>Rời đi hẳn</td><td>из/с/от + C2</td><td>уе́хать из го́рода (rời khỏi thành phố)</td></tr>
+                        <tr><td><b>в- / во-</b></td><td>Đi vào trong</td><td>в + C4</td><td>войти́ в аудито́рию (vào giảng đường)</td></tr>
+                        <tr><td><b>вы-</b></td><td>Đi ra ngoài</td><td>из + C2</td><td>вы́йти из общежи́тия (ra khỏi KTX)</td></tr>
+                        <tr><td><b>под-</b></td><td>Tiến lại gần</td><td>к + C3</td><td>подойти́ к преподава́телю (lại gần thầy)</td></tr>
+                        <tr><td><b>от-</b></td><td>Lùi ra xa</td><td>от + C2</td><td>отойти́ от окна́ (rời khỏi cửa sổ)</td></tr>
+                        <tr><td><b>пере-</b></td><td>Đi ngang qua</td><td>че́рез + C4 (hoặc C4 trực tiếp)</td><td>перейти́ у́лицу (sang đường)</td></tr>
+                        <tr><td><b>про-</b></td><td>Đi xuyên qua / đi qua</td><td>ми́мо + C2 · че́рез + C4</td><td>пройти́ ми́мо ко́рпуса (đi ngang qua tòa nhà)</td></tr>
+                        <tr><td><b>за-</b></td><td>Ghé qua / tạt vào</td><td>в/на + C4 · к + C3</td><td>зайти́ в магази́н (ghé qua cửa hàng)</td></tr>
+                        <tr><td><b>до-</b></td><td>Đi tới đích</td><td>до + C2</td><td>дое́хать до метро́ (đi tới ga metro)</td></tr>
                     </tbody>
                 </table>
             </div>
             """
         )
 
-    elif topic == "Giới từ В / НА & Thời gian":
+    elif topic == "5. Giới từ & Thời gian":
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Cặp giới từ địa điểm bắt buộc nhớ</span></div>
+                <div class="clean-label"><span>Cặp giới từ địa điểm & các từ BẮT BUỘC dùng «НА»</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Ở đâu? (Где? · Cách 6)</th><th>Đi đâu? (Куда? · Cách 4)</th><th>Từ đâu về? (Откуда? · Cách 2)</th><th>Áp dụng cho</th></tr></thead>
+                    <thead><tr><th>Ở đâu? (Где? · C6)</th><th>Đi đâu? (Куда́? · C4)</th><th>Từ đâu? (Отку́да? · C2)</th><th>Dùng cho</th></tr></thead>
                     <tbody>
-                        <tr><td><b>в</b> + Cách 6</td><td><b>в</b> + Cách 4</td><td><b>из</b> + Cách 2</td><td>Không gian kín, thành phố, quốc gia, tòa nhà (в униве́ре, в обща́ге, в Росси́и)</td></tr>
-                        <tr><td><b>на</b> + Cách 6</td><td><b>на</b> + Cách 4</td><td><b>с</b> + Cách 2</td><td>Sự kiện, buổi học, khoa, đảo, không gian mở (на ле́кции, на факульте́те, на вокза́ле)</td></tr>
-                        <tr><td><b>у</b> + Cách 2 (ở chỗ ai)</td><td><b>к</b> + Cách 3 (đến chỗ ai)</td><td><b>от</b> + Cách 2 (từ chỗ ai về)</td><td>Người (у преподава́теля, к врачу́, от дека́на)</td></tr>
+                        <tr><td><b>в</b> + Cách 6</td><td><b>в</b> + Cách 4</td><td><b>из</b> + Cách 2</td><td>Không gian kín, tòa nhà, thành phố, quốc gia (в Росси́и, в ко́мнате, в униве́ре)</td></tr>
+                        <tr><td><b>на</b> + Cách 6</td><td><b>на</b> + Cách 4</td><td><b>с</b> + Cách 2</td><td>Sự kiện, buổi học, khoa, không gian mở, phương hướng</td></tr>
+                        <tr><td><b>у</b> + Cách 2</td><td><b>к</b> + Cách 3</td><td><b>от</b> + Cách 2</td><td>Người (у вра́ча, к дека́ну, от преподава́теля)</td></tr>
                     </tbody>
                 </table>
+                <div class="note-callout">
+                    <b>Danh sách bắt buộc dùng «НА» (rất hay thi & dễ nhầm):</b><br/>
+                    на факульте́те, на ка́федре, на ку́рсе, на ле́кции, на семина́ре, на экза́мене, на пра́ктике, на рабо́те, на заво́де, на по́чте, на вокза́ле, на стадио́не, на пло́щади, на у́лице, на се́вере/ю́ге, на Ро́дине.
+                </div>
             </div>
 
             <div class="clean-card">
-                <div class="clean-label"><span>Cách nói Thứ · Tháng · Giờ trong tiếng Nga</span></div>
+                <div class="clean-label"><span>Cấu trúc nói Thời gian (Thứ · Ngày · Tháng · Giờ)</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Mục</th><th>Cấu trúc chuẩn</th><th>Ví dụ</th></tr></thead>
+                    <thead><tr><th>Hỏi</th><th>Cấu trúc</th><th>Ví dụ</th></tr></thead>
                     <tbody>
-                        <tr><td><b>Vào thứ mấy?</b></td><td><b>в</b> + Cách 4</td><td>в понеде́льник, во вто́рник, в сре́ду, в четве́рг, в пя́тницу, в суббо́ту, в воскресе́нье</td></tr>
-                        <tr><td><b>Vào tháng mấy?</b></td><td><b>в</b> + Cách 6</td><td>в январе́, в феврале́, в ма́рте, в сентябре́, в декабре́</td></tr>
-                        <tr><td><b>Vào ngày mấy?</b></td><td>Số thứ tự giống trung + Tháng (đều <b>Cách 2</b>)</td><td>пе́рвого сентября́ (ngày 1/9), двадца́того мая (ngày 20/5)</td></tr>
-                        <tr><td><b>Lúc mấy giờ?</b></td><td><b>в</b> + số giờ (Cách 4)</td><td>в час (1h), в два часа́ (2h), в пять часо́в (5h), в по́лтора часа́</td></tr>
+                        <tr><td><b>Vào thứ mấy?</b></td><td>в + Cách 4</td><td>в понеде́льник, во вто́рник, в сре́ду, в четве́рг, в пя́тницу, в суббо́ту, в воскресе́нье</td></tr>
+                        <tr><td><b>Vào tháng mấy?</b></td><td>в + Cách 6</td><td>в январе́, в феврале́, в ма́рте, в сентябре́, в ноябре́, в декабре́</td></tr>
+                        <tr><td><b>Vào ngày mấy?</b></td><td>Số thứ tự (trung) + Tháng (đều <b>Cách 2</b>)</td><td>пе́рвого сентября́ (1/9), два́дцать шесто́го ноября́ (26/11)</td></tr>
+                        <tr><td><b>Lúc mấy giờ?</b></td><td>в + số giờ (Cách 4)</td><td>в час (1h), в два часа́ (2h), в пять часо́в (5h), без де́сяти два (2h kém 10)</td></tr>
+                        <tr><td><b>Bao lâu nữa?</b></td><td>че́рез + Cách 4</td><td>че́рез неде́лю (1 tuần nữa), че́рез два дня (2 ngày nữa)</td></tr>
+                        <tr><td><b>Cách đây bao lâu?</b></td><td>Cách 4 + наза́д</td><td>три дня наза́д (3 ngày trước), год наза́д (1 năm trước)</td></tr>
                     </tbody>
                 </table>
+            </div>
+            """
+        )
+
+    elif topic == "6. Số từ & Lượng từ":
+        render_html(
+            """
+            <div class="clean-card">
+                <div class="clean-label"><span>Quy tắc sống còn khi ghép Số đếm với Danh từ</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Số tận cùng bằng</th><th>Cách của Danh từ</th><th>Ví dụ: рубль (rúp)</th><th>Ví dụ: год (năm)</th><th>Ví dụ: час (giờ)</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1</b> (1, 21, 31... trừ 11)</td><td><b>Cách 1 số ít</b></td><td>оди́н рубль</td><td>оди́н год</td><td>оди́н час</td></tr>
+                        <tr><td><b>2, 3, 4</b> (2–4, 22–24... trừ 12–14)</td><td><b>Cách 2 số ít</b></td><td>два рубля́</td><td>три го́да</td><td>четы́ре часа́</td></tr>
+                        <tr><td><b>5–20, 0</b> và <b>мно́го / ма́ло / ско́лько / не́сколько</b></td><td><b>Cách 2 số nhiều</b></td><td>пять рубле́й</td><td>пять <b>лет</b></td><td>пять часо́в</td></tr>
+                    </tbody>
+                </table>
+                <div class="note-callout">
+                    <b>Lưu ý về Tính từ đi cùng số 2, 3, 4:</b><br/>
+                    • Với danh từ giống đực/trung: Tính từ chia <b>Cách 2 số nhiều</b> (два <b>но́вых</b> студе́нта).<br/>
+                    • Với danh từ giống cái: Tính từ thường chia <b>Cách 1 số nhiều</b> (две <b>но́вые</b> кни́ги).
+                </div>
             </div>
             """
         )
@@ -1965,15 +1792,16 @@ def render_russian_knowledge_hub() -> None:
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Mẫu câu giao tiếp chuẩn mực tại Đại học & Phòng Visa (Ngôi «Вы»)</span></div>
+                <div class="clean-label"><span>Cấu trúc câu ghép & Từ nối học thuật (Dùng viết tiểu luận / đồ án)</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Tình huống</th><th>Câu tiếng Nga chuẩn</th><th>Nghĩa tiếng Việt</th></tr></thead>
+                    <thead><tr><th>Từ nối / Cấu trúc</th><th>Quy tắc ngữ pháp</th><th>Ví dụ</th></tr></thead>
                     <tbody>
-                        <tr><td><b>Xin nộp / duyệt đồ án</b></td><td>Здра́вствуйте! Мо́жно показа́ть Вам мою́ курсову́ю рабо́ту (чертёж) на прове́рку?</td><td>Em chào thầy/cô ạ! Em có thể gửi thầy/cô xem và kiểm tra đồ án (bản vẽ) được không ạ?</td></tr>
-                        <tr><td><b>Hỏi lịch tư vấn / thi lại</b></td><td>Подскажи́те, пожа́луйста, когда́ у Вас бу́дет консульта́ция / пересда́ча?</td><td>Thầy/cô cho em hỏi khi nào thầy/cô có buổi giải đáp / thi lại ạ?</td></tr>
-                        <tr><td><b>Xin giấy xác nhận ở Khoa</b></td><td>Здра́вствуйте! Мне нужна́ спра́вка об обуче́нии для продле́ния ви́зы.</td><td>Chào cô! Em cần xin giấy xác nhận đang theo học để gia hạn visa ạ.</td></tr>
-                        <tr><td><b>Gia hạn Visa / Tạm trú</b></td><td>Подскажи́те, пожа́луйста, каки́е докуме́нты нужны́ для продле́ния ви́зы и регистра́ции?</td><td>Xin hỏi em cần chuẩn bị những giấy tờ gì để gia hạn visa và đăng ký tạm trú ạ?</td></tr>
-                        <tr><td><b>Xin phép nghỉ có lý do</b></td><td>Извини́те, пожа́луйста, я сегодня́ не смогу́ прийти́ на па́ру по состоя́нию здоро́вья. Спра́вку принесу́.</td><td>Em xin lỗi, hôm nay em không thể đến lớp vì lý do sức khỏe. Em sẽ nộp giấy khám bệnh ạ.</td></tr>
+                        <tr><td><b>что́бы</b> (để mà)</td><td>Cùng chủ ngữ: <b>что́бы + nguyên thể</b><br/>Khác chủ ngữ: <b>что́бы + thì Quá khứ</b></td><td>Я учу́сь, что́бы <b>получи́ть</b> дипло́м.<br/>Преподава́тель хо́чет, что́бы мы <b>сда́ли</b> рабо́ту.</td></tr>
+                        <tr><td><b>кото́рый</b> (mà / cái mà)</td><td>Giống & số theo danh từ đứng trước; <b>Cách</b> theo vai trò trong mệnh đề sau</td><td>Кни́га, <b>кото́рую</b> я чита́ю (C4).<br/>Университе́т, в <b>кото́ром</b> я учу́сь (C6).</td></tr>
+                        <tr><td><b>потому́ что / поэ́тому</b></td><td>потому́ что (bởi vì) · поэ́тому (vì vậy)</td><td>Я уста́л, <b>потому́ что</b> мно́го рабо́тал.</td></tr>
+                        <tr><td><b>благодаря́ + C3 / из-за + C2</b></td><td>благодаря́ (nhờ vào · tích cực)<br/>из-за (tại vì · tiêu cực)</td><td><b>Благодаря́</b> по́мощи дру́га (C3).<br/><b>Из-за</b> плохо́й пого́ды (C2).</td></tr>
+                        <tr><td><b>несмотря́ на + C4 / хотя́</b></td><td>Mặc dù</td><td><b>Несмотря́ на</b> сло́жность зада́чи, мы реши́ли её.</td></tr>
+                        <tr><td><b>е́сли ..., то ...</b></td><td>Nếu ... thì ... (Điều kiện giả định dùng <b>е́сли бы + quá khứ</b>)</td><td><b>Е́сли</b> у тебя́ есть вопро́сы, <b>то</b> напиши́ мне.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1982,7 +1810,7 @@ def render_russian_knowledge_hub() -> None:
 
 
 # ==============================================================================
-# 8. SỔ TỪ VỰNG & XUẤT ANKI CSV
+# 7. QUẢN LÝ SỔ TỪ VỰNG, FLASHCARDS & TRẮC NGHIỆM ÔN TẬP (TAB 2)
 # ==============================================================================
 def add_vocab_items_to_notebook(items: List[Dict[str, str]]) -> int:
     if "saved_vocab_notebook" not in st.session_state:
@@ -1994,7 +1822,12 @@ def add_vocab_items_to_notebook(items: List[Dict[str, str]]) -> int:
         if ru_k and ru_k.lower() not in existing:
             st.session_state["saved_vocab_notebook"].insert(
                 0,
-                {"ru_accent": ru_k, "en": str(it.get("en", "")).strip(), "vi": str(it.get("vi", "")).strip()},
+                {
+                    "ru_accent": ru_k,
+                    "en": str(it.get("en", "")).strip(),
+                    "vi": str(it.get("vi", "")).strip(),
+                    "mastered": False,
+                },
             )
             existing.add(ru_k.lower())
             added += 1
@@ -2010,8 +1843,225 @@ def export_vocab_to_anki_csv(vocab_list: List[Dict[str, str]]) -> bytes:
     return ("\ufeff" + output.getvalue()).encode("utf-8")
 
 
+def _generate_quiz_question(pool: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if len(pool) < 4:
+        return None
+    target = random.choice(pool)
+    distractors = random.sample([x for x in pool if x["ru_accent"] != target["ru_accent"]], 3)
+    options = [target["vi"]] + [d["vi"] for d in distractors]
+    random.shuffle(options)
+    return {
+        "prompt_ru": target["ru_accent"],
+        "correct_vi": target["vi"],
+        "en": target.get("en", ""),
+        "options": options,
+        "answered": None,
+    }
+
+
+def render_vocab_and_practice_tab() -> None:
+    mode = st.radio(
+        "Chế độ học từ vựng",
+        options=["Thẻ ghi nhớ (Flashcards)", "Trắc nghiệm nhanh (Quiz)", "Sổ từ vựng & Tiếng lóng"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    saved_list = st.session_state["saved_vocab_notebook"]
+    slang_deck = [
+        {"ru_accent": f"{x['accent']} ({x['full']})", "vi": x["vi"], "en": x["en"], "mastered": False}
+        for x in RUSSIAN_SLANG_DICT
+    ]
+
+    if mode == "Thẻ ghi nhớ (Flashcards)":
+        fc_top1, fc_top2 = st.columns([2, 1.5])
+        with fc_top1:
+            deck_choice = st.selectbox(
+                "Bộ thẻ ôn tập",
+                options=["Sổ từ vựng đã lưu", "Từ chưa thuộc trong sổ", "30 từ lóng sinh viên Nga"],
+                label_visibility="collapsed",
+            )
+        if deck_choice == "Sổ từ vựng đã lưu":
+            active_deck = saved_list
+        elif deck_choice == "Từ chưa thuộc trong sổ":
+            active_deck = [v for v in saved_list if not v.get("mastered")]
+        else:
+            active_deck = slang_deck
+
+        with fc_top2:
+            if saved_list:
+                mastered_cnt = sum(1 for v in saved_list if v.get("mastered"))
+                st.caption(f"Tiến độ sổ cá nhân: Đã thuộc **{mastered_cnt} / {len(saved_list)}** từ")
+
+        if not active_deck:
+            st.info("Chưa có từ trong bộ thẻ này. Bạn có thể lưu từ sau khi dịch ở Tab 1, hoặc chọn bộ «30 từ lóng sinh viên Nga» để ôn ngay.")
+            return
+
+        idx = st.session_state["flashcard_index"] % len(active_deck)
+        card = active_deck[idx]
+        status_tag = " · Đã thuộc" if card.get("mastered") else ""
+
+        back_html = (
+            f'<div class="flashcard-back">{esc(card["vi"])}<div style="font-size:0.9rem;color:#52525B;font-weight:400;margin-top:4px;">{esc(card.get("en",""))}</div></div>'
+            if st.session_state["flashcard_show_back"]
+            else '<div style="margin-top:12px;font-size:0.86rem;color:#71717A;">Bấm «Lật thẻ» để kiểm tra nghĩa</div>'
+        )
+        render_html(
+            f"""
+            <div class="flashcard-minimal">
+                <div style="font-size:0.8rem;color:#71717A;margin-bottom:8px;">Thẻ {idx + 1} / {len(active_deck)}{status_tag}</div>
+                <div class="flashcard-word">{esc(card["ru_accent"])}</div>
+                {back_html}
+            </div>
+            """
+        )
+
+        b1, b2, b3, b4, b5 = st.columns(5)
+        with b1:
+            if st.button("Trước", use_container_width=True):
+                st.session_state["flashcard_index"] = (idx - 1) % len(active_deck)
+                st.session_state["flashcard_show_back"] = False
+                st.rerun()
+        with b2:
+            if st.button("Lật thẻ", type="primary", use_container_width=True):
+                st.session_state["flashcard_show_back"] = not st.session_state["flashcard_show_back"]
+                st.rerun()
+        with b3:
+            if st.button("Phát âm", use_container_width=True):
+                ru_clean = card["ru_accent"].split("(")[0].replace("\u0301", "").strip()
+                ab = generate_tts_audio(ru_clean, "ru")
+                if ab:
+                    st.audio(ab, format="audio/mp3")
+        with b4:
+            if deck_choice != "30 từ lóng sinh viên Nga":
+                lbl = "Bỏ đã thuộc" if card.get("mastered") else "Đã thuộc ✓"
+                if st.button(lbl, use_container_width=True):
+                    for item in saved_list:
+                        if item["ru_accent"] == card["ru_accent"]:
+                            item["mastered"] = not item.get("mastered", False)
+                            break
+                    st.session_state["flashcard_show_back"] = False
+                    st.rerun()
+            else:
+                if st.button("Lưu vào sổ", use_container_width=True):
+                    add_vocab_items_to_notebook([card])
+                    st.toast("Đã lưu vào sổ từ vựng.")
+        with b5:
+            if st.button("Tiếp", use_container_width=True):
+                st.session_state["flashcard_index"] = (idx + 1) % len(active_deck)
+                st.session_state["flashcard_show_back"] = False
+                st.rerun()
+
+    elif mode == "Trắc nghiệm nhanh (Quiz)":
+        pool = saved_list if len(saved_list) >= 4 else slang_deck
+        source_note = (
+            f"Đang luyện từ Sổ cá nhân ({len(saved_list)} từ)"
+            if len(saved_list) >= 4
+            else "Đang luyện từ bộ 30 từ lóng sinh viên Nga (lưu từ 4 từ trở lên ở Tab 1 để luyện sổ cá nhân)"
+        )
+        st.caption(f"{source_note} · Điểm phiên này: **{st.session_state['quiz_score']} / {st.session_state['quiz_total']}**")
+
+        if st.session_state.get("current_quiz") is None:
+            st.session_state["current_quiz"] = _generate_quiz_question(pool)
+
+        q = st.session_state["current_quiz"]
+        if q:
+            render_html(
+                f"""
+                <div class="clean-card" style="text-align:center;padding:24px;">
+                    <div style="font-size:0.82rem;color:#71717A;margin-bottom:6px;">Chọn nghĩa tiếng Việt đúng của từ sau:</div>
+                    <div style="font-size:1.6rem;font-weight:700;color:#18181B;">{esc(q['prompt_ru'])}</div>
+                </div>
+                """
+            )
+            for opt_i, opt in enumerate(q["options"]):
+                if st.button(opt, key=f"quiz_opt_{opt_i}", use_container_width=True, disabled=q["answered"] is not None):
+                    q["answered"] = opt
+                    st.session_state["quiz_total"] += 1
+                    if opt == q["correct_vi"]:
+                        st.session_state["quiz_score"] += 1
+                    st.rerun()
+
+            if q["answered"] is not None:
+                if q["answered"] == q["correct_vi"]:
+                    st.success(f"Chính xác: {q['prompt_ru']} = {q['correct_vi']}")
+                else:
+                    st.error(f"Chưa đúng. Đáp án đúng là: {q['correct_vi']}")
+                if st.button("Câu tiếp theo", type="primary"):
+                    st.session_state["current_quiz"] = _generate_quiz_question(pool)
+                    st.rerun()
+
+    else:
+        col_left, col_right = st.columns([1.05, 1.0])
+        with col_left:
+            st.markdown("#### Sổ từ vựng cá nhân")
+            with st.expander("Thêm từ mới thủ công"):
+                with st.form("add_manual_vocab", clear_on_submit=True):
+                    m_ru = st.text_input("Tiếng Nga (có thể kèm trọng âm)", placeholder="VD: осто́йчивость")
+                    m_vi = st.text_input("Nghĩa tiếng Việt", placeholder="VD: Tính ổn định (của tàu)")
+                    m_en = st.text_input("Tiếng Anh (tùy chọn)", placeholder="VD: stability")
+                    if st.form_submit_button("Thêm vào sổ", type="primary", use_container_width=True):
+                        if m_ru.strip() and m_vi.strip():
+                            add_vocab_items_to_notebook([{"ru_accent": m_ru.strip(), "vi": m_vi.strip(), "en": m_en.strip()}])
+                            st.toast("Đã thêm từ mới.")
+                            st.rerun()
+
+            if saved_list:
+                st.download_button(
+                    f"Xuất {len(saved_list)} từ ra CSV (Anki / Excel)",
+                    data=export_vocab_to_anki_csv(saved_list),
+                    file_name="tu_vung_anki.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+                rows = "".join(
+                    f"<tr><td><b>{esc(v['ru_accent'])}</b></td><td>{esc(v['vi'])}</td><td>{'Đã thuộc' if v.get('mastered') else 'Chưa thuộc'}</td></tr>"
+                    for v in saved_list
+                )
+                render_html(
+                    f"""
+                    <div style="max-height:360px;overflow-y:auto;border:1px solid #E5E4DF;border-radius:10px;background:#FFFFFF;margin-top:8px;">
+                        <table class="clean-table" style="margin-top:0;">
+                            <thead><tr><th>Tiếng Nga</th><th>Nghĩa tiếng Việt</th><th>Trạng thái</th></tr></thead>
+                            <tbody>{rows}</tbody>
+                        </table>
+                    </div>
+                    """
+                )
+                if st.button("Xóa toàn bộ sổ từ vựng", use_container_width=True):
+                    st.session_state["saved_vocab_notebook"] = []
+                    st.rerun()
+            else:
+                st.caption("Sổ từ vựng đang trống. Dịch ở Tab 1 rồi bấm «Lưu từ vựng vào sổ ôn tập» hoặc thêm thủ công ở trên.")
+
+        with col_right:
+            st.markdown("#### Tra nhanh 30 từ lóng sinh viên Nga")
+            q_slang = st.text_input("Tìm từ lóng", placeholder="препод, курсач, хвост, инфа...", label_visibility="collapsed")
+            filtered = [
+                x for x in RUSSIAN_SLANG_DICT
+                if not q_slang.strip()
+                or q_slang.lower() in x["word"].lower()
+                or q_slang.lower() in x["vi"].lower()
+                or q_slang.lower() in x["full"].lower()
+            ]
+            rows = "".join(
+                f"<tr><td><b>{esc(x['accent'])}</b><br/><span style='font-size:0.8rem;color:#71717A;'>{esc(x['full'])}</span></td><td>{esc(x['vi'])}</td></tr>"
+                for x in filtered
+            )
+            render_html(
+                f"""
+                <div style="max-height:420px;overflow-y:auto;border:1px solid #E5E4DF;border-radius:10px;background:#FFFFFF;">
+                    <table class="clean-table" style="margin-top:0;">
+                        <thead><tr><th>Tiếng Nga</th><th>Nghĩa tiếng Việt</th></tr></thead>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
+                """
+            )
+
+
 # ==============================================================================
-# 9. HIỂN THỊ KẾT QUẢ DỊCH + 6 CÁCH + CHIA ĐỘNG TỪ + NGỮ PHÁP
+# 8. HIỂN THỊ KẾT QUẢ DỊCH (CHÍNH XÁC THEO LOẠI: TỪ / CÂU / ĐOẠN)
 # ==============================================================================
 def init_session_state() -> None:
     defaults: Dict[str, Any] = {
@@ -2022,11 +2072,12 @@ def init_session_state() -> None:
         "declined_keys": set(),
         "translation_history": [],
         "saved_vocab_notebook": [],
-        "lecture_notes": [],
-        "lecture_ai_summary": "",
-        "last_audio_hash": "",
         "flashcard_index": 0,
         "flashcard_show_back": False,
+        "current_quiz": None,
+        "quiz_score": 0,
+        "quiz_total": 0,
+        "last_meta_badge": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2046,16 +2097,17 @@ def init_session_state() -> None:
             inject_localstorage_sync(action="load_all")
 
 
-def render_translation_result(res: Dict, used_ai: bool) -> None:
-    engine_label = "Gemini AI" if used_ai else "Dịch nhanh"
+def render_translation_result(res: Dict[str, Any], meta_badge: str) -> None:
+    kind_labels = {"word": "Tra từ", "sentence": "Phân tích câu", "paragraph": "Dịch đoạn văn"}
+    kind_text = kind_labels.get(res.get("input_kind", ""), "Bản dịch")
     main_trans = res.get("main_translation", "")
 
     render_html(
         f"""
         <div class="clean-card">
             <div class="clean-label">
-                <span>Bản dịch</span>
-                <span>{esc(engine_label)}</span>
+                <span>{esc(kind_text)}</span>
+                <span>{esc(meta_badge)}</span>
             </div>
             <div class="clean-result-text">{esc(main_trans)}</div>
         </div>
@@ -2072,7 +2124,7 @@ def render_translation_result(res: Dict, used_ai: bool) -> None:
             if audio_b:
                 st.audio(audio_b, format="audio/mp3")
 
-    # PHẦN HÌNH THÁI HỌC: 6 CÁCH (DANH/TÍNH/ĐẠI TỪ) HOẶC CHIA ĐỘNG TỪ THEO NGÔI
+    # 1. CHIA 6 CÁCH HOẶC CHIA ĐỘNG TỪ (CHỈ KHI ĐẦU VÀO LÀ TỪ ĐƠN VÀ DỮ LIỆU HỢP LỆ)
     morph = res.get("morphology") or {}
     cases_table = morph.get("cases_table") or []
     verb_conj = morph.get("verb_conjugation") or {}
@@ -2091,7 +2143,7 @@ def render_translation_result(res: Dict, used_ai: bool) -> None:
                 f"""
                 <div class="clean-card">
                     <div class="clean-label">
-                        <span>Chia động từ tiếng Nga theo các ngôi</span>
+                        <span>Chia động từ theo các ngôi</span>
                         <span>{esc(meta_line)}</span>
                     </div>
                     <table class="clean-table">
@@ -2123,7 +2175,7 @@ def render_translation_result(res: Dict, used_ai: bool) -> None:
         if usage_note:
             render_html(f'<div class="note-callout"><b>Cách dùng ({esc(meta_line)}):</b> {esc(usage_note)}</div>')
 
-    # PHÂN TÍCH NGỮ PHÁP CÂU DÀI (CÁCH MẤY · THỂ ĐỘNG TỪ · CẤU TRÚC)
+    # 2. GIẢI THÍCH NGỮ PHÁP TRONG CÂU / ĐOẠN
     sent_grammar = res.get("sentence_grammar") or []
     if sent_grammar:
         g_rows = "".join(
@@ -2133,7 +2185,7 @@ def render_translation_result(res: Dict, used_ai: bool) -> None:
         render_html(
             f"""
             <div class="clean-card">
-                <div class="clean-label"><span>Giải thích ngữ pháp trong câu</span></div>
+                <div class="clean-label"><span>Giải thích ngữ pháp</span></div>
                 <table class="clean-table">
                     <thead><tr><th>Cụm từ / Từ</th><th>Ngữ pháp (Cách / Thể)</th><th>Giải thích</th></tr></thead>
                     <tbody>{g_rows}</tbody>
@@ -2142,55 +2194,37 @@ def render_translation_result(res: Dict, used_ai: bool) -> None:
             """
         )
 
-    # 2 phiên bản giao tiếp tiếng Nga (Вы / Ты)
-    reply_variants = res.get("russian_reply_variants", {})
-    if reply_variants and (reply_variants.get("formal_vy") or reply_variants.get("casual_ty")):
-        t_col1, t_col2 = st.columns(2)
-        with t_col1:
-            vy = reply_variants.get("formal_vy", "")
-            vy_note = reply_variants.get("formal_vy_vi_note", "")
-            render_html(
-                f"""
-                <div class="tone-card">
-                    <div class="tone-heading">Trang trọng · Ngôi «Вы» (Giảng viên / Khoa)</div>
-                    <div class="tone-body">{esc(vy)}</div>
-                    <div class="tone-sub">{esc(vy_note)}</div>
-                </div>
-                """
-            )
-            if vy:
-                vc1, vc2 = st.columns(2)
-                with vc1:
-                    render_copy_button(vy, "Sao chép", "cp_vy")
-                with vc2:
-                    if st.button("Nghe «Вы»", key="tts_vy_btn", use_container_width=True):
-                        ab = generate_tts_audio(vy, "ru")
-                        if ab:
-                            st.audio(ab, format="audio/mp3")
+    # 3. VÍ DỤ ÁP DỤNG THEO NGỮ CẢNH (THAY CHO PHẦN TRANG TRỌNG / THÂN MẬT)
+    examples = res.get("context_examples") or []
+    if examples:
+        ex_html = "".join(
+            f"""
+            <div class="example-row">
+                <span class="example-tag">{esc(ex.get('context','Ví dụ'))}</span>
+                <div class="example-ru">{esc(ex.get('ru',''))}</div>
+                <div class="example-vi">{esc(ex.get('vi',''))}</div>
+            </div>
+            """
+            for ex in examples
+        )
+        render_html(
+            f"""
+            <div class="clean-card">
+                <div class="clean-label"><span>Ví dụ áp dụng theo ngữ cảnh</span></div>
+                {ex_html}
+            </div>
+            """
+        )
+        ex_btn_cols = st.columns(min(3, len(examples)))
+        for idx, ex in enumerate(examples[:3]):
+            with ex_btn_cols[idx]:
+                if st.button(f"Nghe ví dụ {idx + 1}", key=f"tts_ex_{idx}", use_container_width=True):
+                    ab = generate_tts_audio(ex["ru"].replace("\u0301", ""), "ru")
+                    if ab:
+                        st.audio(ab, format="audio/mp3")
 
-        with t_col2:
-            ty = reply_variants.get("casual_ty", "")
-            ty_note = reply_variants.get("casual_ty_vi_note", "")
-            render_html(
-                f"""
-                <div class="tone-card">
-                    <div class="tone-heading">Thân mật · Ngôi «Ты» (Bạn học / Nhóm lớp)</div>
-                    <div class="tone-body">{esc(ty)}</div>
-                    <div class="tone-sub">{esc(ty_note)}</div>
-                </div>
-                """
-            )
-            if ty:
-                cc1, cc2 = st.columns(2)
-                with cc1:
-                    render_copy_button(ty, "Sao chép", "cp_ty")
-                with cc2:
-                    if st.button("Nghe «Ты»", key="tts_ty_btn", use_container_width=True):
-                        ab = generate_tts_audio(ty, "ru")
-                        if ab:
-                            st.audio(ab, format="audio/mp3")
-
-    slang_list = res.get("slang_explanations", [])
+    # 4. TIẾNG LÓNG (CHỈ HIỆN KHI CÓ TRONG VĂN BẢN)
+    slang_list = res.get("slang_explanations") or []
     if slang_list:
         slang_rows = "".join(
             f"<tr><td><b>{esc(s.get('term',''))}</b></td><td>{esc(s.get('full_form',''))}</td><td>{esc(s.get('meaning_vi',''))}</td></tr>"
@@ -2199,7 +2233,7 @@ def render_translation_result(res: Dict, used_ai: bool) -> None:
         render_html(
             f"""
             <div class="clean-card">
-                <div class="clean-label"><span>Tiếng lóng &amp; viết tắt trong câu</span></div>
+                <div class="clean-label"><span>Tiếng lóng &amp; viết tắt trong văn bản</span></div>
                 <table class="clean-table">
                     <thead><tr><th>Từ lóng</th><th>Dạng đầy đủ</th><th>Giải nghĩa</th></tr></thead>
                     <tbody>{slang_rows}</tbody>
@@ -2208,7 +2242,8 @@ def render_translation_result(res: Dict, used_ai: bool) -> None:
             """
         )
 
-    vocab_table = res.get("vocabulary_table", [])
+    # 5. BẢNG TỪ VỰNG TRỌNG TÂM + NÚT LƯU ÔN TẬP
+    vocab_table = res.get("vocabulary_table") or []
     if vocab_table:
         v_rows = "".join(
             f"<tr><td><b>{esc(r.get('ru_accent',''))}</b></td><td>{esc(r.get('vi',''))}</td><td>{esc(r.get('en',''))}</td></tr>"
@@ -2217,7 +2252,7 @@ def render_translation_result(res: Dict, used_ai: bool) -> None:
         render_html(
             f"""
             <div class="clean-card">
-                <div class="clean-label"><span>Từ vựng quan trọng (có dấu trọng âm)</span></div>
+                <div class="clean-label"><span>Từ vựng đáng chú ý (có dấu trọng âm)</span></div>
                 <table class="clean-table">
                     <thead><tr><th>Tiếng Nga</th><th>Tiếng Việt</th><th>Tiếng Anh</th></tr></thead>
                     <tbody>{v_rows}</tbody>
@@ -2229,25 +2264,24 @@ def render_translation_result(res: Dict, used_ai: bool) -> None:
             added = add_vocab_items_to_notebook(vocab_table)
             st.toast(f"Đã lưu {added} từ mới." if added else "Các từ này đã có trong sổ.")
 
-    ctx_note = res.get("context_note", "")
-    if ctx_note:
-        render_html(f'<div class="note-callout">{esc(ctx_note)}</div>')
+    if res.get("context_note"):
+        render_html(f'<div class="note-callout">{esc(res["context_note"])}</div>')
 
     with st.expander("Đối chiếu 3 ngôn ngữ (Nga · Việt · Anh)"):
         e1, e2, e3 = st.columns(3)
         with e1:
             st.caption("Tiếng Nga")
-            st.write(res.get("ru_version", "—"))
+            st.write(res.get("ru_version") or "—")
         with e2:
             st.caption("Tiếng Việt")
-            st.write(res.get("vi_version", "—"))
+            st.write(res.get("vi_version") or "—")
         with e3:
             st.caption("Tiếng Anh")
-            st.write(res.get("en_version", "—"))
+            st.write(res.get("en_version") or "—")
 
 
 # ==============================================================================
-# 10. GIAO DIỆN CHÍNH (SIDEBAR + HEADER TÁC GIẢ + 4 TAB THỰC CHIẾN)
+# 9. GIAO DIỆN CHÍNH (SIDEBAR + HEADER TÁC GIẢ + 3 TAB TINH GỌN)
 # ==============================================================================
 def main() -> None:
     init_session_state()
@@ -2270,13 +2304,13 @@ def main() -> None:
             """
         )
 
-        st.markdown("#### Cài đặt")
+        st.markdown("#### Cài đặt API")
         saved_key_val = clean_api_key(st.session_state.get("saved_gemini_api_key", ""))
         gemini_api_key = st.text_input(
-            "Gemini API Key (tùy chọn)",
+            "Gemini API Key",
             value=saved_key_val,
             type="password",
-            placeholder="Dán key để bật phân tích 6 cách AI & OCR",
+            placeholder="Dán key để bật dịch AI siêu tốc & 6 cách",
         )
         st.markdown(f"[Lấy Gemini API Key miễn phí →]({GEMINI_API_KEY_URL})")
 
@@ -2294,9 +2328,11 @@ def main() -> None:
                     st.session_state["declined_keys"].add(clean_key_input)
                     st.rerun()
         elif clean_key_input and clean_key_input == saved_key_val:
-            st.caption("Đã lưu API Key trên trình duyệt này.")
+            pinned = st.session_state.get("pinned_gemini_model", "gemini-2.0-flash-lite")
+            st.caption(f"Đã lưu Key · Model nhanh: `{pinned}`")
             if st.button("Xóa Key đã lưu", use_container_width=True):
                 st.session_state["saved_gemini_api_key"] = ""
+                st.session_state.pop("pinned_gemini_model", None)
                 inject_localstorage_sync(action="delete_key")
                 st.rerun()
         else:
@@ -2354,13 +2390,13 @@ def main() -> None:
                     st.session_state["is_author_admin"] = False
                     st.rerun()
 
-    # HEADER TỐI GIẢN KÈM THÔNG TIN & ẢNH TÁC GIẢ
+    # HEADER TỐI GIẢN KÈM ẢNH & THÔNG TIN TÁC GIẢ
     render_html(
         f"""
         <div class="minimal-header">
             <div>
                 <h1 class="minimal-title">Anh Minh Translate</h1>
-                <div class="minimal-sub">Dịch thuật Nga – Việt, chia 6 cách, ngữ pháp &amp; ghi chép bài giảng cho sinh viên tại Nga</div>
+                <div class="minimal-sub">Dịch nhanh Nga – Việt, chia 6 cách, ngữ pháp &amp; ôn tập từ vựng cho sinh viên tại Nga</div>
             </div>
             <div class="author-chip">
                 <img src="{avatar_uri}" class="author-chip-img" alt="Mai Văn Minh" />
@@ -2373,12 +2409,10 @@ def main() -> None:
         """
     )
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["Dịch & Ngữ pháp", "Nghe giảng & Thu âm", "Kiến thức tiếng Nga", "Từ vựng & Tiếng lóng"]
-    )
+    tab1, tab2, tab3 = st.tabs(["Dịch & Ngữ pháp", "Từ vựng & Ôn tập", "Kiến thức tiếng Nga"])
 
     # ==========================================================================
-    # TAB 1: DỊCH, CHIA 6 CÁCH, CHIA ĐỘNG TỪ, GIẢI THÍCH NGỮ PHÁP & OCR
+    # TAB 1: DỊCH SIÊU TỐC, 6 CÁCH, CHIA ĐỘNG TỪ, VÍ DỤ ÁP DỤNG & OCR
     # ==========================================================================
     with tab1:
         dir_c1, dir_c2 = st.columns([5, 1])
@@ -2398,11 +2432,11 @@ def main() -> None:
                 st.rerun()
 
         source_text = st.text_area(
-            "Nội dung cần dịch hoặc tra ngữ pháp",
+            "Nội dung cần dịch",
             key="input_text_area",
             height=145,
             label_visibility="collapsed",
-            placeholder="Nhập 1 từ tiếng Nga để chia 6 cách / chia động từ theo ngôi, hoặc dán câu dài / đoạn tài liệu để dịch & giải thích ngữ pháp...",
+            placeholder="Nhập 1 từ tiếng Nga để chia 6 cách / chia động từ, hoặc dán câu / đoạn văn để dịch, giải thích ngữ pháp và xem ví dụ áp dụng...",
         )
 
         b1, b2, b3, b4 = st.columns([1.8, 1.4, 1.0, 2.8])
@@ -2416,7 +2450,9 @@ def main() -> None:
                 st.rerun()
         with b4:
             if source_text.strip():
-                st.caption(f"{len(source_text)} ký tự · {len(source_text.split())} từ")
+                k_map = {"word": "Từ đơn", "sentence": "Câu", "paragraph": "Đoạn văn"}
+                detected_k = k_map[classify_input_type(source_text)]
+                st.caption(f"{detected_k} · {len(source_text)} ký tự · {len(source_text.split())} từ")
 
         with st.expander("Dịch từ ảnh chụp slide / bảng viết hoặc tệp tài liệu (.txt, .docx, .pdf)"):
             u1, u2 = st.columns(2)
@@ -2436,7 +2472,7 @@ def main() -> None:
                                     if ocr_res.get("extracted_text"):
                                         st.session_state["input_text_area"] = ocr_res["extracted_text"]
                                     st.session_state["last_translation_result"] = ocr_res
-                                    st.session_state["last_used_ai"] = True
+                                    st.session_state["last_meta_badge"] = "Gemini Vision OCR"
                                     st.rerun()
                                 else:
                                     st.error(f"Không thể xử lý ảnh: {ocr_err}")
@@ -2460,24 +2496,28 @@ def main() -> None:
 
         if translate_clicked:
             if not source_text.strip():
-                st.warning("Vui lòng nhập từ hoặc câu cần dịch.")
+                st.warning("Vui lòng nhập từ, câu hoặc đoạn văn cần dịch.")
             else:
                 result_data: Optional[Dict] = None
-                used_ai = False
+                meta_badge = "Dịch nhanh"
                 if clean_key_input:
-                    with st.spinner("Đang dịch và phân tích ngữ pháp..."):
-                        result_data, g_err = call_gemini_smart_translate(clean_key_input, source_text, direction)
+                    with st.spinner("Đang dịch..."):
+                        result_data, g_err, elapsed, model_used = call_gemini_smart_translate(
+                            clean_key_input, source_text, direction
+                        )
                         if result_data:
-                            used_ai = True
+                            meta_badge = f"{model_used} · {elapsed:.2f}s"
                         elif g_err and "không hợp lệ" in g_err.lower():
                             st.warning("API Key không hợp lệ, đã tự động chuyển sang dịch nhanh.")
 
                 if not result_data:
+                    t_free = time.perf_counter()
                     with st.spinner("Đang dịch..."):
-                        result_data = fallback_smart_translate(source_text, direction)
+                        result_data = fallback_fast_translate(source_text, direction)
+                    meta_badge = f"Dịch nhanh · {time.perf_counter() - t_free:.2f}s"
 
                 st.session_state["last_translation_result"] = result_data
-                st.session_state["last_used_ai"] = used_ai
+                st.session_state["last_meta_badge"] = meta_badge
                 st.session_state["translation_history"].insert(
                     0,
                     {
@@ -2485,7 +2525,7 @@ def main() -> None:
                         "preview": source_text.strip()[:120],
                         "full_source": source_text.strip(),
                         "result": result_data,
-                        "used_ai": used_ai,
+                        "meta_badge": meta_badge,
                     },
                 )
                 st.session_state["translation_history"] = st.session_state["translation_history"][:MAX_HISTORY_ITEMS]
@@ -2493,7 +2533,7 @@ def main() -> None:
         if st.session_state.get("last_translation_result"):
             render_translation_result(
                 st.session_state["last_translation_result"],
-                st.session_state.get("last_used_ai", False),
+                st.session_state.get("last_meta_badge", "Dịch nhanh"),
             )
 
         if st.session_state["translation_history"]:
@@ -2506,237 +2546,20 @@ def main() -> None:
                         if st.button("Mở lại", key=f"h_{idx}", use_container_width=True):
                             st.session_state["input_text_area"] = h["full_source"]
                             st.session_state["last_translation_result"] = h["result"]
-                            st.session_state["last_used_ai"] = h["used_ai"]
+                            st.session_state["last_meta_badge"] = h["meta_badge"]
                             st.rerun()
 
     # ==========================================================================
-    # TAB 2: NGHE GIẢNG & THU ÂM (NATIVE AUDIO INPUT ỔN ĐỊNH 100% + GHI CHÉP)
+    # TAB 2: TỪ VỰNG & ÔN TẬP (FLASHCARDS + QUIZ TRẮC NGHIỆM + SỔ TỪ VỰNG)
     # ==========================================================================
     with tab2:
-        st.caption("Bấm biểu tượng micro bên dưới để thu âm trực tiếp trên điện thoại hoặc máy tính. Hệ thống tự kích âm lượng (RMS x12), chép lời, dịch theo ngữ cảnh và lưu nối tiếp vào sổ bài giảng.")
-
-        lc1, lc2 = st.columns(2)
-        with lc1:
-            speech_lang = st.selectbox(
-                "Ngôn ngữ giảng viên nói",
-                options=[("ru-RU", "Tiếng Nga (ru-RU)"), ("vi-VN", "Tiếng Việt (vi-VN)"), ("en-US", "Tiếng Anh (en-US)")],
-                format_func=lambda x: x[1],
-                key="lec_src_lang",
-            )[0]
-        with lc2:
-            target_lang = st.selectbox(
-                "Dịch sang",
-                options=[("vi", "Tiếng Việt"), ("ru", "Tiếng Nga"), ("en", "Tiếng Anh")],
-                format_func=lambda x: x[1],
-                key="lec_tgt_lang",
-            )[0]
-
-        rec_col, up_col = st.columns([1.15, 1.0])
-        with rec_col:
-            recorded_audio = st.audio_input("Thu âm trực tiếp (Bấm để bắt đầu / dừng)", key="native_mic_input") if hasattr(st, "audio_input") else None
-        with up_col:
-            uploaded_audio = st.file_uploader(
-                "Hoặc tải tệp ghi âm (.wav, .mp3, .m4a, .ogg, .webm)",
-                type=["wav", "mp3", "m4a", "ogg", "webm"],
-                key="lec_file_upload",
-            )
-
-        active_bytes: Optional[bytes] = None
-        active_ext = ".wav"
-        if recorded_audio is not None:
-            active_bytes = recorded_audio.getvalue()
-            active_ext = ".wav"
-        elif uploaded_audio is not None:
-            active_bytes = uploaded_audio.getvalue()
-            active_ext = Path(uploaded_audio.name).suffix.lower() or ".wav"
-
-        if active_bytes:
-            audio_hash = hashlib.sha256(active_bytes).hexdigest()
-            if audio_hash != st.session_state["last_audio_hash"]:
-                with st.spinner("Đang lọc âm, nhận diện giọng nói và dịch..."):
-                    tr_t, tl_t, err = transcribe_and_translate_audio_bytes(
-                        audio_bytes=active_bytes,
-                        source_lang_speech=speech_lang,
-                        target_lang_trans=target_lang,
-                        gemini_api_key=clean_key_input,
-                        file_ext=active_ext,
-                        recent_context=st.session_state["lecture_notes"],
-                    )
-                    st.session_state["last_audio_hash"] = audio_hash
-                    if err:
-                        st.error(err)
-                    elif tr_t:
-                        st.session_state["lecture_notes"].append(
-                            {
-                                "time": datetime.now().strftime("%H:%M:%S"),
-                                "source": tr_t,
-                                "translation": tl_t or "",
-                            }
-                        )
-                        st.toast("Đã ghi nhận và dịch xong đoạn vừa thu.")
-
-        # Thanh công cụ Sổ Bài Giảng
-        notes = st.session_state["lecture_notes"]
-        if notes:
-            tb1, tb2, tb3, tb4 = st.columns([1.6, 1.2, 1.4, 1.0])
-            with tb1:
-                if st.button("Tóm tắt bài giảng (AI)", type="primary", use_container_width=True):
-                    with st.spinner("Đang tóm tắt bài giảng..."):
-                        summary, s_err = summarize_lecture_notes_ai(clean_key_input, notes)
-                        if s_err:
-                            st.warning(s_err)
-                        elif summary:
-                            st.session_state["lecture_ai_summary"] = summary
-            with tb2:
-                full_txt = "\n\n".join(
-                    f"[{i+1} · {n['time']}]\nGốc: {n['source']}\nDịch: {n['translation']}"
-                    for i, n in enumerate(notes)
-                )
-                render_copy_button(full_txt, "Sao chép tất cả", "cp_lec_all")
-            with tb3:
-                st.download_button(
-                    "Tải bản ghi (.txt)",
-                    data=full_txt.encode("utf-8"),
-                    file_name=f"bai_giang_{datetime.now().strftime('%Y-%m-%d')}.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-            with tb4:
-                if st.button("Xóa sổ", use_container_width=True):
-                    st.session_state["lecture_notes"] = []
-                    st.session_state["lecture_ai_summary"] = ""
-                    st.session_state["last_audio_hash"] = ""
-                    st.rerun()
-
-            if st.session_state.get("lecture_ai_summary"):
-                render_html(
-                    f'<div class="note-callout"><b>Tóm tắt bài giảng (AI):</b><br/><div style="white-space:pre-wrap;margin-top:6px;">{esc(st.session_state["lecture_ai_summary"])}</div></div>'
-                )
-
-            st.markdown(f"#### Sổ bài giảng ({len(notes)} đoạn)")
-            for idx, item in enumerate(reversed(notes), 1):
-                real_num = len(notes) - idx + 1
-                render_html(
-                    f"""
-                    <div class="lecture-item">
-                        <div class="lecture-meta">Đoạn #{real_num} · {esc(item['time'])}</div>
-                        <div class="lecture-src">{esc(item['source'])}</div>
-                        <div class="lecture-tgt">{esc(item['translation'])}</div>
-                    </div>
-                    """
-                )
-        else:
-            render_html(
-                """
-                <div class="clean-card" style="text-align:center;color:#71717A;padding:34px 20px;">
-                    Chưa có đoạn ghi âm nào. Hãy bấm nút micro ở trên để thu âm câu giảng viên vừa nói — kết quả sẽ tự động nối tiếp thành sổ bài giảng tại đây.
-                </div>
-                """
-            )
-
-        with st.expander("Chế độ phụ: Nghe liên tục qua trình duyệt (Chrome/Edge trên máy tính)"):
-            components.html(build_live_speech_fallback_component(gemini_api_key=clean_key_input), height=340, scrolling=False)
+        render_vocab_and_practice_tab()
 
     # ==========================================================================
-    # TAB 3: KIẾN THỨC HỌC TIẾNG NGA KHOA HỌC
+    # TAB 3: KIẾN THỨC TIẾNG NGA CHI TIẾT (7 CHUYÊN ĐỀ)
     # ==========================================================================
     with tab3:
         render_russian_knowledge_hub()
-
-    # ==========================================================================
-    # TAB 4: SỔ TỪ VỰNG, FLASHCARDS & TRA CỨU TIẾNG LÓNG SINH VIÊN NGA
-    # ==========================================================================
-    with tab4:
-        v_col1, v_col2 = st.columns([1.05, 1.0])
-
-        with v_col1:
-            st.markdown("#### Sổ từ vựng & Ôn thẻ nhanh")
-            deck_mode = st.radio(
-                "Nguồn thẻ ôn tập",
-                options=["Từ đã lưu", "Tiếng lóng sinh viên Nga"],
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-            active_deck = (
-                st.session_state["saved_vocab_notebook"]
-                if deck_mode == "Từ đã lưu"
-                else [{"ru_accent": f"{x['accent']} ({x['full']})", "vi": x["vi"], "en": x["en"]} for x in RUSSIAN_SLANG_DICT]
-            )
-
-            if not active_deck:
-                st.caption("Chưa có từ nào được lưu. Sau khi dịch ở Tab 1, bấm «Lưu từ vựng vào sổ ôn tập» để thêm vào đây.")
-            else:
-                idx = st.session_state["flashcard_index"] % len(active_deck)
-                card = active_deck[idx]
-                back_html = (
-                    f'<div class="flashcard-back">{esc(card["vi"])}<div style="font-size:0.9rem;color:#52525B;font-weight:400;margin-top:4px;">{esc(card["en"])}</div></div>'
-                    if st.session_state["flashcard_show_back"]
-                    else '<div style="margin-top:12px;font-size:0.86rem;color:#71717A;">Bấm «Lật thẻ» để xem nghĩa</div>'
-                )
-                render_html(
-                    f"""
-                    <div class="flashcard-minimal">
-                        <div style="font-size:0.8rem;color:#71717A;margin-bottom:8px;">{idx + 1} / {len(active_deck)}</div>
-                        <div class="flashcard-word">{esc(card["ru_accent"])}</div>
-                        {back_html}
-                    </div>
-                    """
-                )
-                fb1, fb2, fb3, fb4 = st.columns(4)
-                with fb1:
-                    if st.button("Trước", use_container_width=True):
-                        st.session_state["flashcard_index"] = (idx - 1) % len(active_deck)
-                        st.session_state["flashcard_show_back"] = False
-                        st.rerun()
-                with fb2:
-                    if st.button("Lật thẻ", type="primary", use_container_width=True):
-                        st.session_state["flashcard_show_back"] = not st.session_state["flashcard_show_back"]
-                        st.rerun()
-                with fb3:
-                    if st.button("Phát âm", use_container_width=True):
-                        ru_clean = card["ru_accent"].split("(")[0].replace("\u0301", "").strip()
-                        ab = generate_tts_audio(ru_clean, "ru")
-                        if ab:
-                            st.audio(ab, format="audio/mp3")
-                with fb4:
-                    if st.button("Tiếp", use_container_width=True):
-                        st.session_state["flashcard_index"] = (idx + 1) % len(active_deck)
-                        st.session_state["flashcard_show_back"] = False
-                        st.rerun()
-
-                if st.session_state["saved_vocab_notebook"]:
-                    st.download_button(
-                        f"Xuất {len(st.session_state['saved_vocab_notebook'])} từ đã lưu ra CSV (Anki / Excel)",
-                        data=export_vocab_to_anki_csv(st.session_state["saved_vocab_notebook"]),
-                        file_name="tu_vung_anki.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                    )
-
-        with v_col2:
-            st.markdown("#### Tra nhanh tiếng lóng sinh viên Nga")
-            q_slang = st.text_input("Tìm từ lóng", placeholder="Ví dụ: препод, курсач, хвост, инфа...", label_visibility="collapsed")
-            filtered = [
-                x for x in RUSSIAN_SLANG_DICT
-                if not q_slang.strip()
-                or q_slang.lower() in x["word"].lower()
-                or q_slang.lower() in x["vi"].lower()
-                or q_slang.lower() in x["full"].lower()
-            ]
-            rows = "".join(
-                f"<tr><td><b>{esc(x['accent'])}</b><br/><span style='font-size:0.8rem;color:#71717A;'>{esc(x['full'])}</span></td><td>{esc(x['vi'])}</td></tr>"
-                for x in filtered
-            )
-            render_html(
-                f"""
-                <div style="max-height:420px;overflow-y:auto;border:1px solid #E5E4DF;border-radius:10px;background:#FFFFFF;">
-                    <table class="clean-table" style="margin-top:0;">
-                        <thead><tr><th>Tiếng Nga</th><th>Nghĩa tiếng Việt</th></tr></thead>
-                        <tbody>{rows}</tbody>
-                    </table>
-                </div>
-                """
-            )
 
 
 if __name__ == "__main__":
