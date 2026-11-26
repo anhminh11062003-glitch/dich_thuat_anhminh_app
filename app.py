@@ -66,14 +66,25 @@ MAX_MEM_CACHE_SIZE = 300
 MAX_AI_CACHE_SIZE = 150
 MAX_HISTORY_ITEMS = 50
 
-PREFERRED_GEMINI_MODELS = [
+PREFERRED_GEMINI_MODELS_FAST = [
     "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
     "gemini-2.0-flash-lite",
     "gemini-2.0-flash",
-    "gemini-1.5-flash",
 ]
+
+PREFERRED_GEMINI_MODELS_QUALITY = [
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+]
+
+PREFERRED_GEMINI_MODELS = PREFERRED_GEMINI_MODELS_FAST
 
 
 def _get_secret_or_env(key: str, default: str = "") -> str:
@@ -1295,8 +1306,11 @@ def call_gemini_fast_rest(
     if key_err:
         return None, key_err, ""
 
+    ai_speed_mode = st.session_state.get("ai_speed_mode", "fast")
+    pref_list = PREFERRED_GEMINI_MODELS_QUALITY if ai_speed_mode == "quality" else PREFERRED_GEMINI_MODELS_FAST
+    ordered_discovered = [m for m in pref_list if m in discovered] + [m for m in discovered if m not in pref_list]
     pinned = st.session_state.get("pinned_gemini_model", "")
-    models = ([pinned] + [m for m in discovered if m != pinned]) if (pinned and pinned in discovered) else discovered
+    models = ([pinned] + [m for m in ordered_discovered if m != pinned]) if (pinned and pinned in ordered_discovered) else ordered_discovered
     last_error = ""
 
     for model_name in models[:5]:
@@ -1305,7 +1319,9 @@ def call_gemini_fast_rest(
             "temperature": temperature,
             "responseMimeType": "application/json",
         }
-        if "2.5" in model_name:
+        if "gemini-3" in model_name:
+            gen_cfg["thinkingConfig"] = {"thinkingLevel": "LOW" if ai_speed_mode == "quality" else "MINIMAL"}
+        elif "2.5" in model_name:
             gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
 
         payload = {"contents": [{"parts": [{"text": prompt_text}]}], "generationConfig": gen_cfg}
@@ -2221,6 +2237,7 @@ def init_session_state() -> None:
         "is_author_admin": False,
         "saved_gemini_api_key": "",
         "theme_mode": "light",
+        "ai_speed_mode": "fast",
         "translation_history": [],
         "saved_vocab_notebook": [],
         "flashcard_index": 0,
@@ -2643,7 +2660,20 @@ def main() -> None:
             if key_err:
                 st.error(key_err)
             else:
-                top_m = st.session_state.get("pinned_gemini_model") or (models_avail[0] if models_avail else "gemini-flash")
+                mode_lbl = st.radio(
+                    "Chế độ model Gemini",
+                    options=["Siêu tốc (3.5 Flash-Lite)", "Chất lượng cao (3.8 Flash)"],
+                    index=0 if st.session_state.get("ai_speed_mode", "fast") == "fast" else 1,
+                    horizontal=False,
+                )
+                new_ai_mode = "quality" if "3.8" in mode_lbl else "fast"
+                if new_ai_mode != st.session_state.get("ai_speed_mode", "fast"):
+                    st.session_state["ai_speed_mode"] = new_ai_mode
+                    st.session_state.pop("pinned_gemini_model", None)
+                    st.rerun()
+                pref_now = PREFERRED_GEMINI_MODELS_QUALITY if new_ai_mode == "quality" else PREFERRED_GEMINI_MODELS_FAST
+                best_m = next((m for m in pref_now if m in models_avail), models_avail[0] if models_avail else "gemini-3.5-flash-lite")
+                top_m = st.session_state.get("pinned_gemini_model") or best_m
                 st.caption(f"Sẵn sàng · Model: `{top_m}`")
         else:
             st.caption("Chưa có Key — đang dùng dịch cơ bản.")
