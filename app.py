@@ -1,5 +1,5 @@
 """
-Anh Minh Translate — Dịch thuật siêu tốc, ngữ pháp 6 cách & ôn tập tiếng Nga cho sinh viên tại Nga
+Anh Minh Translate — Dịch thuật siêu tốc, ngữ pháp 6 cách & ôn tập tiếng Nga đồng bộ đa thiết bị
 Tác giả: Mai Văn Minh — Sinh viên năm 4, Chuyên ngành Đóng tàu, СПбГМТУ (Xanh-Petecbua)
 """
 
@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 import random
 import re
+import secrets
+import sqlite3
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.error
@@ -62,7 +64,7 @@ AUTHOR_NOTIFICATION_EMAIL = "anhminh11062003@gmail.com"
 FIXED_AUTHOR_AVATAR_BASE64_OR_URL = ""
 MAX_MEM_CACHE_SIZE = 300
 MAX_AI_CACHE_SIZE = 150
-MAX_HISTORY_ITEMS = 30
+MAX_HISTORY_ITEMS = 50
 
 PREFERRED_GEMINI_MODELS = [
     "gemini-2.5-flash-lite",
@@ -85,13 +87,16 @@ def _get_secret_or_env(key: str, default: str = "") -> str:
 
 
 DEFAULT_AUTHOR_PASSWORD = _get_secret_or_env("AUTHOR_ADMIN_PASSWORD", "minh1106")
+SESSION_SIGNING_SECRET = _get_secret_or_env("SESSION_SIGNING_SECRET", f"am_session_{DEFAULT_AUTHOR_PASSWORD}_v12")
+SUPABASE_URL = _get_secret_or_env("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = _get_secret_or_env("SUPABASE_KEY", "")
 FORMSPREE_ENDPOINT = _get_secret_or_env("FORMSPREE_ENDPOINT", "")
 EMAILJS_SERVICE_ID = _get_secret_or_env("EMAILJS_SERVICE_ID", "")
 EMAILJS_TEMPLATE_ID = _get_secret_or_env("EMAILJS_TEMPLATE_ID", "")
 EMAILJS_PUBLIC_KEY = _get_secret_or_env("EMAILJS_PUBLIC_KEY", "")
 
+SQLITE_DB_PATH = Path("anhminh_users.db")
 USER_LOGS_FILE = Path(".user_access_logs.json")
-CLIENT_STATE_FILE = Path(".client_private_vault.json")
 
 STUDENT_YEAR_OPTIONS = [
     "Dự bị tiếng Nga (Подфак)",
@@ -106,6 +111,7 @@ STUDENT_YEAR_OPTIONS = [
 ]
 
 DIRECTION_OPTIONS = [
+    "Tự động (Nga ↔ Việt)",
     "Tiếng Nga → Tiếng Việt",
     "Tiếng Việt → Tiếng Nga",
     "Đối chiếu 3 ngôn ngữ (Nga · Việt · Anh)",
@@ -240,291 +246,238 @@ def render_copy_button(text_to_copy: str, label: str = "Sao chép", key_suffix: 
 
 
 # ==============================================================================
-# 2. LƯU CỐ ĐỊNH KEY, HỒ SƠ SINH VIÊN & GIAO DIỆN SÁNG/TỐI QUA MỌI LẦN F5
+# 2. HỆ THỐNG TÀI KHOẢN & ĐỒNG BỘ ĐA THIẾT BỊ (SUPABASE CLOUD + SQLITE LOCAL)
+#    GIỮ PHIÊN BỀN VỮNG QUA MỌI LẦN F5 BẰNG HMAC TOKEN TRÊN st.query_params["s"]
 # ==============================================================================
-def _get_client_vault_id() -> str:
+def _normalize_username(raw: str) -> str:
+    return re.sub(r"[^a-z0-9_.@-]", "", raw.strip().lower())
+
+
+def _hash_password(password: str, salt: Optional[str] = None) -> str:
+    salt_val = salt or secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt_val.encode("utf-8"), 120000)
+    return f"{salt_val}${dk.hex()}"
+
+
+def _verify_password(password: str, stored_hash: str) -> bool:
     try:
-        if hasattr(st, "context") and hasattr(st.context, "cookies"):
-            uid = str(st.context.cookies.get("am_uid", "")).strip()
-            if len(uid) >= 8:
-                return f"uid_{uid[:24]}"
+        salt_val, hex_hash = stored_hash.split("$", 1)
+        expected = _hash_password(password, salt_val).split("$", 1)[1]
+        return hmac.compare_digest(hex_hash, expected)
+    except Exception:
+        return False
+
+
+def create_session_token(username: str) -> str:
+    """Tạo token phiên đã ký HMAC (không chứa mật khẩu hay API key) để giữ đăng nhập qua F5."""
+    u_b64 = base64.urlsafe_b64encode(username.encode("utf-8")).decode("ascii").rstrip("=")
+    sig = hmac.new(SESSION_SIGNING_SECRET.encode("utf-8"), u_b64.encode("ascii"), hashlib.sha256).hexdigest()[:24]
+    return f"{u_b64}.{sig}"
+
+
+def verify_session_token(token: str) -> Optional[str]:
+    if not token or "." not in token:
+        return None
+    try:
+        u_b64, sig = token.split(".", 1)
+        expected = hmac.new(SESSION_SIGNING_SECRET.encode("utf-8"), u_b64.encode("ascii"), hashlib.sha256).hexdigest()[:24]
+        if not hmac.compare_digest(sig, expected):
+            return None
+        pad = "=" * (-len(u_b64) % 4)
+        return base64.urlsafe_b64decode((u_b64 + pad).encode("ascii")).decode("utf-8")
+    except Exception:
+        return None
+
+
+def _is_cloud_sync_enabled() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_KEY)
+
+
+def _init_sqlite_db() -> None:
+    try:
+        with sqlite3.connect(SQLITE_DB_PATH) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS am_users (
+                    username TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.commit()
     except Exception:
         pass
 
-    try:
-        headers = st.context.headers if hasattr(st, "context") and hasattr(st.context, "headers") else {}
-        ua = str(headers.get("User-Agent", ""))
-        lang = str(headers.get("Accept-Language", ""))
-        xff = str(headers.get("X-Forwarded-For", headers.get("X-Real-Ip", "")))
-        ip_part = xff.split(",")[0].strip() if xff else ""
-        if ua or ip_part:
-            raw = f"{ip_part}::{ua}::{lang}"
-            return "fp_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
-    except Exception:
-        pass
-    return ""
+
+def _supabase_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    h = {
+        "apikey": SUPABASE_KEY,
+        "Content-Type": "application/json",
+    }
+    if SUPABASE_KEY.startswith("eyJ"):
+        h["Authorization"] = f"Bearer {SUPABASE_KEY}"
+    if extra:
+        h.update(extra)
+    return h
 
 
-def _read_vault_all() -> Dict[str, Any]:
-    if CLIENT_STATE_FILE.exists():
+def db_get_user(username: str) -> Optional[Dict[str, Any]]:
+    uname = _normalize_username(username)
+    if not uname:
+        return None
+
+    # 1. Ưu tiên đọc từ Supabase Cloud (đồng bộ đa thiết bị)
+    if _is_cloud_sync_enabled():
         try:
-            data = json.loads(CLIENT_STATE_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
+            url = f"{SUPABASE_URL}/rest/v1/am_users?username=eq.{urllib.parse.quote(uname)}&select=payload"
+            req = urllib.request.Request(url, headers=_supabase_headers(), method="GET")
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                rows = json.loads(resp.read().decode("utf-8"))
+                if isinstance(rows, list) and rows:
+                    payload = rows[0].get("payload")
+                    if isinstance(payload, str):
+                        return json.loads(payload)
+                    if isinstance(payload, dict):
+                        return payload
         except Exception:
             pass
-    return {}
 
-
-def _write_vault_entry(client_id: str, updates: Dict[str, Any]) -> None:
-    if not client_id:
-        return
-    data = _read_vault_all()
-    entry = data.get(client_id) if isinstance(data.get(client_id), dict) else {}
-    entry.update(updates)
-    entry["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    data[client_id] = entry
+    # 2. Đọc từ SQLite cục bộ
+    _init_sqlite_db()
     try:
-        CLIENT_STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        with sqlite3.connect(SQLITE_DB_PATH) as conn:
+            row = conn.execute("SELECT payload FROM am_users WHERE username = ?", (uname,)).fetchone()
+            if row and row[0]:
+                return json.loads(row[0])
+    except Exception:
+        pass
+    return None
+
+
+def db_save_user(username: str, payload: Dict[str, Any]) -> bool:
+    uname = _normalize_username(username)
+    if not uname:
+        return False
+
+    now_iso = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    payload["updated_at"] = now_iso
+    payload_str = json.dumps(payload, ensure_ascii=False)
+
+    # 1. Luôn lưu SQLite cục bộ trước (nhanh, an toàn)
+    _init_sqlite_db()
+    local_ok = False
+    try:
+        with sqlite3.connect(SQLITE_DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO am_users (username, payload, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(username) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at",
+                (uname, payload_str, now_iso),
+            )
+            conn.commit()
+            local_ok = True
     except Exception:
         pass
 
-
-def load_persisted_user_data() -> Tuple[str, Dict[str, str], str]:
-    api_key = ""
-    profile: Dict[str, str] = {}
-    theme = ""
-    had_qp = False
-
-    try:
-        qp_k = st.query_params.get("_am_k", "")
-        if qp_k:
-            api_key = clean_api_key(qp_k)
-            del st.query_params["_am_k"]
-            had_qp = True
-
-        qp_n = st.query_params.get("_am_n", "").strip()
-        qp_y = st.query_params.get("_am_y", "").strip()
-        qp_u = st.query_params.get("_am_u", "").strip()
-        if qp_n and qp_u:
-            profile = {
-                "full_name": qp_n,
-                "student_year": qp_y if qp_y in STUDENT_YEAR_OPTIONS else "Sinh viên Năm 4",
-                "university": qp_u,
-            }
-        qp_t = st.query_params.get("_am_t", "").strip()
-        if qp_t in ("light", "dark"):
-            theme = qp_t
-        for k in ("_am_n", "_am_y", "_am_u", "_am_t", "saved_gkey", "sv_name", "sv_year", "sv_uni"):
-            if k in st.query_params:
-                del st.query_params[k]
-                had_qp = True
-    except Exception:
-        pass
-
-    if had_qp:
-        components.html(
-            """
-            <script>
-            try {
-                const url = new URL(window.parent.location.href);
-                ["_am_k", "_am_n", "_am_y", "_am_u", "_am_t", "saved_gkey", "sv_name", "sv_year", "sv_uni"]
-                    .forEach(p => url.searchParams.delete(p));
-                window.parent.history.replaceState({}, "", url.toString());
-            } catch (e) {}
-            </script>
-            """,
-            height=0,
-        )
-
-    try:
-        if hasattr(st, "context") and hasattr(st.context, "cookies"):
-            cookies = st.context.cookies
-            if not api_key and cookies.get("am_gkey"):
-                api_key = clean_api_key(urllib.parse.unquote(str(cookies.get("am_gkey"))))
-            if not theme and cookies.get("am_theme") in ("light", "dark"):
-                theme = str(cookies.get("am_theme"))
-            if not profile and cookies.get("am_prof"):
-                raw_p = urllib.parse.unquote(str(cookies.get("am_prof")))
-                parsed_p = json.loads(raw_p)
-                if isinstance(parsed_p, dict) and parsed_p.get("full_name") and parsed_p.get("university"):
-                    profile = {
-                        "full_name": str(parsed_p["full_name"]).strip(),
-                        "student_year": str(parsed_p.get("student_year", "Sinh viên Năm 4")).strip(),
-                        "university": str(parsed_p["university"]).strip(),
-                    }
-    except Exception:
-        pass
-
-    cid = _get_client_vault_id()
-    if cid and (not api_key or not profile or not theme):
-        entry = _read_vault_all().get(cid)
-        if isinstance(entry, dict):
-            if not api_key and entry.get("api_key"):
-                api_key = clean_api_key(str(entry["api_key"]))
-            if not theme and entry.get("theme") in ("light", "dark"):
-                theme = str(entry["theme"])
-            if not profile and isinstance(entry.get("profile"), dict):
-                p = entry["profile"]
-                if p.get("full_name") and p.get("university"):
-                    profile = {
-                        "full_name": str(p["full_name"]).strip(),
-                        "student_year": str(p.get("student_year", "Sinh viên Năm 4")).strip(),
-                        "university": str(p["university"]).strip(),
-                    }
-
-    return api_key, profile, (theme or "light")
-
-
-def persist_browser_state(
-    action: str,
-    api_key: str = "",
-    student_profile: Optional[Dict[str, str]] = None,
-    theme_mode: str = "light",
-) -> None:
-    cid = _get_client_vault_id()
-    safe_key = json.dumps(clean_api_key(api_key))
-    safe_prof = json.dumps(student_profile or {}, ensure_ascii=False)
-    safe_theme = json.dumps(theme_mode)
-
-    if action == "save_key":
-        _write_vault_entry(cid, {"api_key": clean_api_key(api_key)})
-        components.html(
-            f"""
-            <script>
-            try {{
-                const k = {safe_key};
-                localStorage.setItem("anhminh_saved_gemini_key", k);
-                const c = "am_gkey=" + encodeURIComponent(k) + "; path=/; max-age=31536000; SameSite=Lax";
-                try {{ window.parent.document.cookie = c; }} catch (e) {{}}
-                document.cookie = c;
-            }} catch (e) {{}}
-            </script>
-            """,
-            height=0,
-        )
-    elif action == "delete_key":
-        _write_vault_entry(cid, {"api_key": ""})
-        components.html(
-            """
-            <script>
-            try {
-                localStorage.removeItem("anhminh_saved_gemini_key");
-                const c = "am_gkey=; path=/; max-age=0; SameSite=Lax";
-                try { window.parent.document.cookie = c; } catch (e) {}
-                document.cookie = c;
-            } catch (e) {}
-            </script>
-            """,
-            height=0,
-        )
-    elif action == "save_profile":
-        _write_vault_entry(cid, {"profile": student_profile or {}})
-        components.html(
-            f"""
-            <script>
-            try {{
-                const pStr = JSON.stringify({safe_prof});
-                localStorage.setItem("anhminh_saved_student_profile", pStr);
-                const c = "am_prof=" + encodeURIComponent(pStr) + "; path=/; max-age=31536000; SameSite=Lax";
-                try {{ window.parent.document.cookie = c; }} catch (e) {{}}
-                document.cookie = c;
-            }} catch (e) {{}}
-            </script>
-            """,
-            height=0,
-        )
-    elif action == "save_theme":
-        _write_vault_entry(cid, {"theme": theme_mode})
-        components.html(
-            f"""
-            <script>
-            try {{
-                const t = {safe_theme};
-                localStorage.setItem("anhminh_theme_mode", t);
-                const c = "am_theme=" + encodeURIComponent(t) + "; path=/; max-age=31536000; SameSite=Lax";
-                try {{ window.parent.document.cookie = c; }} catch (e) {{}}
-                document.cookie = c;
-            }} catch (e) {{}}
-            </script>
-            """,
-            height=0,
-        )
-    elif action == "bootstrap_from_localstorage":
-        components.html(
-            """
-            <script>
-            try {
-                let hasUid = (document.cookie || "").includes("am_uid=");
-                if (!hasUid) {
-                    const randUid = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).replace(/-/g, "");
-                    const uidCookie = "am_uid=" + randUid + "; path=/; max-age=31536000; SameSite=Lax";
-                    try { window.parent.document.cookie = uidCookie; } catch (e) {}
-                    document.cookie = uidCookie;
-                }
-
-                const url = new URL(window.parent.location.href);
-                let changed = false;
-
-                const savedKey = localStorage.getItem("anhminh_saved_gemini_key");
-                if (savedKey && savedKey.trim().length > 10) {
-                    const ck = "am_gkey=" + encodeURIComponent(savedKey.trim()) + "; path=/; max-age=31536000; SameSite=Lax";
-                    try { window.parent.document.cookie = ck; } catch (e) {}
-                    url.searchParams.set("_am_k", savedKey.trim());
-                    changed = true;
-                }
-
-                const rawProf = localStorage.getItem("anhminh_saved_student_profile");
-                if (rawProf) {
-                    const prof = JSON.parse(rawProf);
-                    if (prof && prof.full_name && prof.university) {
-                        const cp = "am_prof=" + encodeURIComponent(rawProf) + "; path=/; max-age=31536000; SameSite=Lax";
-                        try { window.parent.document.cookie = cp; } catch (e) {}
-                        url.searchParams.set("_am_n", prof.full_name);
-                        url.searchParams.set("_am_y", prof.student_year || "Sinh viên Năm 4");
-                        url.searchParams.set("_am_u", prof.university);
-                        changed = true;
-                    }
-                }
-
-                const savedTheme = localStorage.getItem("anhminh_theme_mode");
-                if (savedTheme === "dark" || savedTheme === "light") {
-                    url.searchParams.set("_am_t", savedTheme);
-                    changed = true;
-                }
-
-                const lastSync = parseInt(sessionStorage.getItem("am_last_sync_ts") || "0", 10);
-                if (changed && (Date.now() - lastSync > 4000)) {
-                    sessionStorage.setItem("am_last_sync_ts", String(Date.now()));
-                    window.parent.location.replace(url.toString());
-                }
-            } catch (e) {}
-            </script>
-            """,
-            height=0,
-        )
-
-
-def log_user_locally(full_name: str, student_year: str, university: str) -> None:
-    logs: List[Dict[str, str]] = []
-    if USER_LOGS_FILE.exists():
+    # 2. Đồng bộ lên Supabase Cloud (nếu đã cấu hình Secrets)
+    cloud_ok = False
+    if _is_cloud_sync_enabled():
         try:
-            loaded = json.loads(USER_LOGS_FILE.read_text(encoding="utf-8"))
-            if isinstance(loaded, list):
-                logs = loaded
+            url = f"{SUPABASE_URL}/rest/v1/am_users?on_conflict=username"
+            body = json.dumps({"username": uname, "payload": payload, "updated_at": now_iso}, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers=_supabase_headers({"Prefer": "resolution=merge-duplicates,return=minimal"}),
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                if resp.status in (200, 201, 204):
+                    cloud_ok = True
         except Exception:
-            logs = []
-    logs.insert(
-        0,
-        {
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "full_name": full_name,
-            "student_year": student_year,
-            "university": university,
-        },
-    )
+            pass
+
+    return cloud_ok or local_ok
+
+
+def db_list_all_users() -> List[Dict[str, str]]:
+    """Dành cho Chế độ Tác giả xem danh sách sinh viên đã đăng ký."""
+    users: List[Dict[str, str]] = []
+    if _is_cloud_sync_enabled():
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/am_users?select=username,payload,updated_at&order=updated_at.desc&limit=50"
+            req = urllib.request.Request(url, headers=_supabase_headers(), method="GET")
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                rows = json.loads(resp.read().decode("utf-8"))
+                for r in rows:
+                    p = r.get("payload") if isinstance(r.get("payload"), dict) else {}
+                    prof = p.get("profile") or {}
+                    users.append({
+                        "username": r.get("username", ""),
+                        "full_name": prof.get("full_name", ""),
+                        "student_year": prof.get("student_year", ""),
+                        "university": prof.get("university", ""),
+                        "vocab_count": str(len(p.get("vocab_notebook") or [])),
+                        "time": str(r.get("updated_at", ""))[:19],
+                    })
+                return users
+        except Exception:
+            pass
+
+    _init_sqlite_db()
     try:
-        USER_LOGS_FILE.write_text(json.dumps(logs[:300], ensure_ascii=False, indent=2), encoding="utf-8")
+        with sqlite3.connect(SQLITE_DB_PATH) as conn:
+            rows = conn.execute("SELECT username, payload, updated_at FROM am_users ORDER BY updated_at DESC LIMIT 50").fetchall()
+            for uname, raw_p, upd in rows:
+                p = json.loads(raw_p) if raw_p else {}
+                prof = p.get("profile") or {}
+                users.append({
+                    "username": uname,
+                    "full_name": prof.get("full_name", ""),
+                    "student_year": prof.get("student_year", ""),
+                    "university": prof.get("university", ""),
+                    "vocab_count": str(len(p.get("vocab_notebook") or [])),
+                    "time": str(upd)[:19],
+                })
+    except Exception:
+        pass
+    return users
+
+
+def sync_current_account_to_db() -> None:
+    """Lưu đồng bộ tức thì toàn bộ trạng thái tài khoản hiện tại (API Key, Hồ sơ, Sổ từ vựng, Lịch sử, Nền sáng/tối)."""
+    uname = st.session_state.get("auth_username", "")
+    if not uname:
+        return
+    existing = db_get_user(uname) or {}
+    payload = {
+        "password_hash": existing.get("password_hash", st.session_state.get("auth_password_hash", "")),
+        "profile": {
+            "full_name": st.session_state.get("confirmed_user_name", ""),
+            "student_year": st.session_state.get("confirmed_user_year", "Sinh viên Năm 4"),
+            "university": st.session_state.get("confirmed_user_uni", ""),
+        },
+        "api_key": clean_api_key(st.session_state.get("saved_gemini_api_key", "")),
+        "theme_mode": st.session_state.get("theme_mode", "light"),
+        "vocab_notebook": st.session_state.get("saved_vocab_notebook", [])[:500],
+        "translation_history": st.session_state.get("translation_history", [])[:MAX_HISTORY_ITEMS],
+    }
+    db_save_user(uname, payload)
+
+
+def apply_user_payload_to_session(username: str, payload: Dict[str, Any]) -> None:
+    st.session_state["auth_username"] = username
+    st.session_state["auth_password_hash"] = payload.get("password_hash", "")
+    prof = payload.get("profile") or {}
+    st.session_state["confirmed_user_name"] = prof.get("full_name", "")
+    st.session_state["confirmed_user_year"] = prof.get("student_year", "Sinh viên Năm 4")
+    st.session_state["confirmed_user_uni"] = prof.get("university", "")
+    st.session_state["saved_gemini_api_key"] = clean_api_key(payload.get("api_key", ""))
+    st.session_state["theme_mode"] = payload.get("theme_mode", "light") if payload.get("theme_mode") in ("light", "dark") else "light"
+    st.session_state["saved_vocab_notebook"] = payload.get("vocab_notebook") if isinstance(payload.get("vocab_notebook"), list) else []
+    st.session_state["translation_history"] = payload.get("translation_history") if isinstance(payload.get("translation_history"), list) else []
+    try:
+        st.query_params["s"] = create_session_token(username)
     except Exception:
         pass
 
@@ -535,8 +488,6 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
     from email.mime.text import MIMEText
 
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    log_user_locally(full_name, student_year, university)
-
     gmail_app_pwd = _get_secret_or_env("GMAIL_APP_PASSWORD", "")
     if gmail_app_pwd:
         try:
@@ -546,7 +497,7 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
             msg["To"] = AUTHOR_NOTIFICATION_EMAIL
             html_body = (
                 f"<div style='font-family:sans-serif;padding:16px;'>"
-                f"<h3>Thông báo sinh viên sử dụng Anh Minh Translate</h3>"
+                f"<h3>Thông báo sinh viên đăng ký Anh Minh Translate</h3>"
                 f"<p><b>Họ và tên:</b> {esc(full_name)}</p>"
                 f"<p><b>Năm học:</b> {esc(student_year)}</p>"
                 f"<p><b>Trường:</b> {esc(university)}</p>"
@@ -564,75 +515,20 @@ def send_user_notification_email(full_name: str, student_year: str, university: 
         "Content-Type": "application/json",
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 Chrome/126.0.0.0 Safari/537.36",
-        "Origin": "https://dich-thuat-anhminh.streamlit.app",
-        "Referer": "https://dich-thuat-anhminh.streamlit.app/",
     }
-
     if FORMSPREE_ENDPOINT:
         try:
             req = urllib.request.Request(
                 FORMSPREE_ENDPOINT,
-                data=json.dumps(
-                    {"Họ và tên": full_name, "Năm học": student_year, "Trường": university, "Thời gian": now_str}
-                ).encode("utf-8"),
-                headers=headers_json,
-                method="POST",
+                data=json.dumps({"Họ và tên": full_name, "Năm học": student_year, "Trường": university, "Thời gian": now_str}).encode("utf-8"),
+                headers=headers_json, method="POST",
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 if resp.status in (200, 201):
                     return True, "Formspree"
         except Exception:
             pass
-
-    if EMAILJS_SERVICE_ID and EMAILJS_TEMPLATE_ID and EMAILJS_PUBLIC_KEY:
-        try:
-            ejs_payload = {
-                "service_id": EMAILJS_SERVICE_ID,
-                "template_id": EMAILJS_TEMPLATE_ID,
-                "user_id": EMAILJS_PUBLIC_KEY,
-                "template_params": {
-                    "to_email": AUTHOR_NOTIFICATION_EMAIL,
-                    "user_name": full_name,
-                    "student_year": student_year,
-                    "university": university,
-                    "access_time": now_str,
-                },
-            }
-            req = urllib.request.Request(
-                "https://api.emailjs.com/api/v1.0/email/send",
-                data=json.dumps(ejs_payload).encode("utf-8"),
-                headers=headers_json,
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                if resp.status in (200, 201):
-                    return True, "EmailJS"
-        except Exception:
-            pass
-
-    try:
-        payload_fs = {
-            "_subject": f"[Anh Minh Translate] Người dùng mới: {full_name} ({university})",
-            "_template": "table",
-            "_captcha": "false",
-            "Ho_va_Ten": full_name,
-            "Sinh_vien_nam": student_year,
-            "Truong_theo_hoc": university,
-            "Thoi_gian": now_str,
-        }
-        req_fs = urllib.request.Request(
-            f"https://formsubmit.co/ajax/{AUTHOR_NOTIFICATION_EMAIL}",
-            data=json.dumps(payload_fs).encode("utf-8"),
-            headers=headers_json,
-            method="POST",
-        )
-        with urllib.request.urlopen(req_fs, timeout=8) as resp:
-            if resp.status in (200, 201):
-                return True, "FormSubmit"
-    except Exception:
-        pass
-
-    return False, "Local Log"
+    return False, "DB Saved"
 
 
 # ==============================================================================
@@ -739,9 +635,7 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
 
         {hide_admin_chrome}
 
-        :root {{
-            color-scheme: {c_scheme} !important;
-        }}
+        :root {{ color-scheme: {c_scheme} !important; }}
 
         html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
             background-color: {bg_page} !important;
@@ -776,7 +670,6 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             font-size: 0.85rem !important;
         }}
 
-        /* SIDEBAR */
         section[data-testid="stSidebar"] {{
             background-color: {bg_sidebar} !important;
             border-right: 1px solid {border_light} !important;
@@ -791,11 +684,8 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
         section[data-testid="stSidebar"] li {{
             color: {text_main} !important;
         }}
-        section[data-testid="stSidebar"] a {{
-            color: {link_color} !important;
-        }}
+        section[data-testid="stSidebar"] a {{ color: {link_color} !important; }}
 
-        /* INPUT & TEXTAREA */
         textarea, input[type="text"], input[type="password"] {{
             background-color: {bg_surface} !important;
             color: {text_main} !important;
@@ -822,7 +712,6 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             border-radius: 10px !important;
         }}
 
-        /* SELECTBOX & DROPDOWN */
         div[data-baseweb="select"] > div {{
             background-color: {bg_surface} !important;
             border: 1px solid {border_strong} !important;
@@ -852,7 +741,6 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             background-color: {bg_subtle} !important;
         }}
 
-        /* BUTTONS */
         div.stButton > button[kind="primary"],
         div.stFormSubmitButton > button[kind="primary"],
         div.stDownloadButton > button[kind="primary"] {{
@@ -870,9 +758,7 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
         div.stDownloadButton > button[kind="primary"] * {{
             color: {btn_pri_fg} !important;
         }}
-        div.stButton > button[kind="primary"]:hover {{
-            background-color: {btn_pri_hover} !important;
-        }}
+        div.stButton > button[kind="primary"]:hover {{ background-color: {btn_pri_hover} !important; }}
 
         div.stButton > button[kind="secondary"],
         div.stDownloadButton > button[kind="secondary"],
@@ -891,11 +777,8 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             color: {btn_sec_fg} !important;
         }}
         div.stButton > button[kind="secondary"]:hover,
-        div.stDownloadButton > button[kind="secondary"]:hover {{
-            background-color: {btn_sec_hover} !important;
-        }}
+        div.stDownloadButton > button[kind="secondary"]:hover {{ background-color: {btn_sec_hover} !important; }}
 
-        /* TABS */
         div[data-testid="stTabs"] div[role="tablist"] {{
             gap: 6px;
             border-bottom: 1px solid {border_light} !important;
@@ -914,9 +797,7 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             font-weight: 500 !important;
             font-size: 0.92rem !important;
         }}
-        div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {{
-            background-color: {bg_subtle} !important;
-        }}
+        div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {{ background-color: {bg_subtle} !important; }}
         div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {{
             background-color: {btn_pri_bg} !important;
             border-color: {btn_pri_bg} !important;
@@ -926,7 +807,6 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             font-weight: 600 !important;
         }}
 
-        /* EXPANDER & FILE UPLOADER */
         div[data-testid="stExpander"] {{
             background-color: {bg_surface} !important;
             border: 1px solid {border_light} !important;
@@ -945,16 +825,13 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             border-radius: 10px !important;
         }}
         div[data-testid="stFileUploader"] section *,
-        div[data-testid="stFileUploader"] small {{
-            color: {text_main} !important;
-        }}
+        div[data-testid="stFileUploader"] small {{ color: {text_main} !important; }}
         div[data-testid="stFileUploader"] button {{
             background-color: {bg_subtle} !important;
             color: {text_main} !important;
             border: 1px solid {border_strong} !important;
         }}
 
-        /* HEADER + TÁC GIẢ */
         .minimal-header {{
             padding-bottom: 16px;
             margin-bottom: 18px;
@@ -966,12 +843,8 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             gap: 14px;
         }}
         .minimal-title {{
-            font-size: 1.55rem;
-            font-weight: 700;
-            letter-spacing: -0.025em;
-            color: {text_main};
-            margin: 0;
-            line-height: 1.2;
+            font-size: 1.55rem; font-weight: 700; letter-spacing: -0.025em;
+            color: {text_main}; margin: 0; line-height: 1.2;
         }}
         .minimal-sub {{ font-size: 0.88rem; color: {text_sub}; margin-top: 3px; }}
         .author-chip {{
@@ -1022,11 +895,8 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
         }}
 
         .syn-ant-item {{
-            padding: 7px 0;
-            border-bottom: 1px solid {border_light};
-            font-size: 0.92rem;
-            color: {text_main};
-            line-height: 1.45;
+            padding: 7px 0; border-bottom: 1px solid {border_light};
+            font-size: 0.92rem; color: {text_main}; line-height: 1.45;
         }}
         .syn-ant-item:last-child {{ border-bottom: none; }}
 
@@ -1055,6 +925,16 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             font-size: 1.1rem; font-weight: 600; color: {text_main};
         }}
 
+        .stat-grid {{
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 14px 0;
+        }}
+        .stat-box {{
+            background: {bg_surface}; border: 1px solid {border_light}; border-radius: 10px;
+            padding: 12px 14px; text-align: center;
+        }}
+        .stat-num {{ font-size: 1.35rem; font-weight: 700; color: {text_main}; }}
+        .stat-lbl {{ font-size: 0.78rem; color: {text_sub}; margin-top: 2px; }}
+
         @media (max-width: 768px) {{
             .main .block-container {{ padding: 1rem 0.85rem 2.5rem 0.85rem !important; }}
             .minimal-title {{ font-size: 1.32rem; }}
@@ -1066,8 +946,35 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
 
 
 # ==============================================================================
-# 5. PHÂN LOẠI ĐẦU VÀO, DÒ MODEL TỰ ĐỘNG & KIỂM SOÁT CHẤT LƯỢNG ĐẦU RA
+# 5. PHÂN LOẠI ĐẦU VÀO, NHẬN DIỆN CHIỀU DỊCH CHUẨN & ĐỘNG CƠ DỊCH API SIÊU TỐC
 # ==============================================================================
+def resolve_effective_direction(source_text: str, selected_direction: str) -> str:
+    """
+    Xác định chính xác chiều dịch thực tế để KHÔNG BAO GIỜ bị lỗi nhập tiếng Việt lại ra tiếng Việt
+    hay nhập tiếng Nga lại ra tiếng Nga.
+    """
+    if selected_direction == DIRECTION_OPTIONS[3]:  # Đối chiếu 3 ngôn ngữ
+        return selected_direction
+
+    has_cyr = bool(re.search(r"[а-яА-ЯёЁ]", source_text))
+    has_latin = bool(re.search(r"[a-zA-ZăâđêôơưĂÂĐÊÔƠƯàáảãạèéẻẽẹìíỉĩịòóỏõọùúủũụỳýỷỹỵ]", source_text))
+
+    if selected_direction == DIRECTION_OPTIONS[0]:  # Tự động (Nga ↔ Việt)
+        return DIRECTION_OPTIONS[1] if has_cyr else DIRECTION_OPTIONS[2]
+
+    if selected_direction == DIRECTION_OPTIONS[1]:  # Tiếng Nga → Tiếng Việt
+        if not has_cyr and has_latin:
+            return DIRECTION_OPTIONS[2]  # Người dùng gõ tiếng Việt (có dấu hoặc không dấu) -> dịch sang Nga
+        return DIRECTION_OPTIONS[1]
+
+    if selected_direction == DIRECTION_OPTIONS[2]:  # Tiếng Việt → Tiếng Nga
+        if has_cyr and not has_latin:
+            return DIRECTION_OPTIONS[1]  # Người dùng dán thuần tiếng Nga -> dịch sang Việt
+        return DIRECTION_OPTIONS[2]
+
+    return selected_direction
+
+
 def classify_input_type(text: str) -> str:
     cleaned = text.strip()
     if not cleaned:
@@ -1343,9 +1250,9 @@ def _parse_json_response(raw_text: str) -> Optional[Dict]:
 
 
 def validate_and_clean_ai_result(
-    parsed: Dict[str, Any], input_kind: str, direction: str = DIRECTION_OPTIONS[0], source_text: str = ""
+    parsed: Dict[str, Any], input_kind: str, effective_dir: str, source_text: str = ""
 ) -> Dict[str, Any]:
-    """Kiểm soát chặt chất lượng đầu ra & đảm bảo đúng ngôn ngữ đích (không bao giờ trả tiếng Việt khi dịch Việt → Nga)."""
+    """Kiểm soát tuyệt đối ngôn ngữ đích & lọc dữ liệu rác."""
     if not isinstance(parsed, dict):
         return {}
 
@@ -1360,22 +1267,32 @@ def validate_and_clean_ai_result(
     vi_v = _valid_str(parsed.get("vi_version"))
     en_v = _valid_str(parsed.get("en_version"))
 
-    # BẢO VỆ CHIỀU DỊCH TIẾNG VIỆT → TIẾNG NGA: main_translation bắt buộc phải có chữ Nga (Cyrillic)
-    if direction == DIRECTION_OPTIONS[1]:
-        if not re.search(r"[а-яА-ЯёЁ]", main_t):
+    # KIỂM SOÁT TUYỆT ĐỐI CHIỀU VIỆT → NGA: main_translation PHẢI là tiếng Nga (Cyrillic)
+    if effective_dir == DIRECTION_OPTIONS[2]:
+        has_vi_in_main = bool(re.search(r"[ăâđêôơưàáảãạèéẻẽẹìíỉĩịòóỏõọùúủũụỳýỷỹỵ]", main_t.lower()))
+        if not re.search(r"[а-яА-ЯёЁ]", main_t) or has_vi_in_main:
             if re.search(r"[а-яА-ЯёЁ]", ru_v):
                 main_t = ru_v
             elif source_text.strip():
                 main_t = fast_free_translate(source_text, "vi", "ru")
                 ru_v = main_t
+        if not re.search(r"[а-яА-ЯёЁ]", ru_v):
+            ru_v = main_t
         if not vi_v:
             vi_v = source_text.strip()
-    elif direction == DIRECTION_OPTIONS[0]:
-        if re.search(r"[а-яА-ЯёЁ]", main_t) and vi_v and not re.search(r"[а-яА-ЯёЁ]", vi_v):
-            main_t = vi_v
+
+    # KIỂM SOÁT TUYỆT ĐỐI CHIỀU NGA → VIỆT: main_translation PHẢI là tiếng Việt
+    elif effective_dir == DIRECTION_OPTIONS[1]:
+        if re.search(r"[а-яА-ЯёЁ]", main_t):
+            if vi_v and not re.search(r"[а-яА-ЯёЁ]", vi_v):
+                main_t = vi_v
+            elif source_text.strip():
+                main_t = fast_free_translate(source_text, "ru", "vi")
+                vi_v = main_t
 
     out: Dict[str, Any] = {
         "input_kind": input_kind,
+        "effective_dir": effective_dir,
         "main_translation": main_t,
         "ru_version": ru_v,
         "vi_version": vi_v,
@@ -1420,7 +1337,6 @@ def validate_and_clean_ai_result(
         if clean_m.get("cases_table") or clean_m.get("verb_conjugation") or clean_m.get("usage_note"):
             out["morphology"] = clean_m
 
-    # Từ đồng nghĩa & trái nghĩa (có từ tiếng Nga + nghĩa tiếng Việt)
     for field_name in ("synonyms", "antonyms"):
         raw_list = parsed.get(field_name)
         if isinstance(raw_list, list):
@@ -1478,34 +1394,31 @@ def validate_and_clean_ai_result(
 
 
 def call_gemini_smart_translate(
-    api_key: str, source_text: str, direction: str
+    api_key: str, source_text: str, effective_dir: str
 ) -> Tuple[Optional[Dict], Optional[str], float, str]:
     t0 = time.perf_counter()
     input_kind = classify_input_type(source_text)
 
     ai_cache = _get_lru_cache("gemini_result_cache")
-    cache_key = hashlib.sha256(f"{direction}::{input_kind}::{source_text.strip()}".encode("utf-8")).hexdigest()
+    cache_key = hashlib.sha256(f"{effective_dir}::{input_kind}::{source_text.strip()}".encode("utf-8")).hexdigest()
     if cache_key in ai_cache:
         ai_cache.move_to_end(cache_key)
         return ai_cache[cache_key], None, 0.01, "Cache"
 
-    if direction == DIRECTION_OPTIONS[1]:
+    if effective_dir == DIRECTION_OPTIONS[2]:
         dir_rule = (
             "CHIỀU DỊCH BẮT BUỘC: TIẾNG VIỆT → TIẾNG NGA.\n"
-            "- `main_translation` BẮT BUỘC PHẢI LÀ TIẾNG NGA (chữ cái Cyrillic, có dấu trọng âm \\u0301 nếu là từ đơn). TUYỆT ĐỐI KHÔNG lặp lại tiếng Việt vào `main_translation`!\n"
-            "- `ru_version` là bản tiếng Nga; `vi_version` là bản tiếng Việt gốc; `en_version` là tiếng Anh."
+            "- `main_translation` BẮT BUỘC CHỈ CHỨA TIẾNG NGA (chữ Cyrillic, có dấu trọng âm \\u0301 nếu là từ đơn). TUYỆT ĐỐI KHÔNG viết tiếng Việt vào `main_translation`!\n"
+            "- `ru_version` là tiếng Nga; `vi_version` là tiếng Việt gốc; `en_version` là tiếng Anh."
         )
-    elif direction == DIRECTION_OPTIONS[0]:
+    elif effective_dir == DIRECTION_OPTIONS[1]:
         dir_rule = (
             "CHIỀU DỊCH BẮT BUỘC: TIẾNG NGA → TIẾNG VIỆT.\n"
-            "- `main_translation` BẮT BUỘC PHẢI LÀ TIẾNG VIỆT chuẩn xác, tự nhiên.\n"
+            "- `main_translation` BẮT BUỘC CHỈ CHỨA TIẾNG VIỆT chuẩn xác, tự nhiên.\n"
             "- `ru_version` là tiếng Nga gốc; `vi_version` là tiếng Việt; `en_version` là tiếng Anh."
         )
     else:
-        dir_rule = (
-            "CHIỀU DỊCH: ĐỐI CHIẾU 3 NGÔN NGỮ (NGA · VIỆT · ANH).\n"
-            "- `main_translation` trình bày ngắn gọn bản dịch chính; điền đầy đủ `ru_version`, `vi_version`, `en_version`."
-        )
+        dir_rule = "CHIỀU DỊCH: ĐỐI CHIẾU 3 NGÔN NGỮ (NGA · VIỆT · ANH). Điền đầy đủ `ru_version`, `vi_version`, `en_version`."
 
     if input_kind == "word":
         task_instruction = """
@@ -1513,8 +1426,8 @@ def call_gemini_smart_translate(
 1. Xác định đúng từ loại tiếng Nga (Danh từ / Tính từ / Đại từ / Động từ / Trạng từ).
 2. Nếu là ĐỘNG TỪ: BẮT BUỘC điền đủ `verb_conjugation` (я, ты, он / она / оно, мы, вы, они, Quá khứ, Mệnh lệnh) và ghi rõ cặp thể НСВ / СВ vào `aspect_or_gender`. Đặt `cases_table` = [].
 3. Nếu là DANH TỪ / TÍNH TỪ / ĐẠI TỪ / CỤM DANH TỪ: BẮT BUỘC điền ĐỦ 6 CÁCH vào `cases_table` (1. Именительный -> 6. Предложный, có dấu trọng âm \\u0301, cả `singular` và `plural`; nếu không có số nhiều ghi "—"). Đặt `verb_conjugation` = {}.
-4. Nếu là TRẠNG TỪ / TỪ KHÔNG BIẾN CÁCH: để `cases_table` = [], `verb_conjugation` = {}, giải thích cách dùng & cấp so sánh vào `usage_note`.
-5. BẮT BUỘC điền `synonyms` (2–4 từ đồng nghĩa tiếng Nga có dấu trọng âm \\u0301 + nghĩa Việt) và `antonyms` (1–3 từ trái nghĩa tiếng Nga có dấu trọng âm \\u0301 + nghĩa Việt, nếu từ có trái nghĩa thực tế; nếu không có thì để `[]`).
+4. Nếu là TRẠNG TỪ / TỪ KHÔNG BIẾN CÁCH: đặt `cases_table` = [], `verb_conjugation` = {}, giải thích cách dùng & cấp so sánh vào `usage_note`.
+5. BẮT BUỘC điền `synonyms` (2–4 từ đồng nghĩa tiếng Nga có trọng âm \\u0301 + nghĩa Việt) và `antonyms` (1–3 từ trái nghĩa tiếng Nga có trọng âm \\u0301 + nghĩa Việt nếu có).
 6. BẮT BUỘC tạo 3 ví dụ áp dụng thực tế (`context_examples`) chứa CHÍNH từ tiếng Nga này, có dấu trọng âm \\u0301 và dịch tiếng Việt.
 7. Đặt `sentence_grammar` = [].
 """
@@ -1524,7 +1437,7 @@ def call_gemini_smart_translate(
 1. Đặt `morphology` = {}.
 2. BẮT BUỘC điền `sentence_grammar` (3–6 mục) phân tích ngữ pháp tiếng Nga (cách mấy, tại sao, thể động từ НСВ/СВ).
 3. BẮT BUỘC tạo 2–3 ví dụ áp dụng (`context_examples`) dùng lại cấu trúc hoặc từ khóa chính của câu.
-4. Điền `synonyms` / `antonyms` (1–3 cặp) cho từ khóa quan trọng nhất trong câu nếu hữu ích (nếu không cần thì để `[]`).
+4. Điền `synonyms` / `antonyms` (1–3 cặp) cho từ khóa quan trọng nhất trong câu nếu phù hợp.
 5. Điền `vocabulary_table` 3–6 từ khóa quan trọng (có dấu trọng âm \\u0301).
 """
     else:
@@ -1576,7 +1489,7 @@ CHỈ TRẢ VỀ đúng 1 JSON hợp lệ:
 
     try:
         parsed = _parse_json_response(raw_text)
-        cleaned = validate_and_clean_ai_result(parsed or {}, input_kind, direction=direction, source_text=source_text)
+        cleaned = validate_and_clean_ai_result(parsed or {}, input_kind, effective_dir=effective_dir, source_text=source_text)
         if not cleaned.get("main_translation"):
             return None, "Gemini trả về JSON không có bản dịch.", elapsed, model_used
         ai_cache[cache_key] = cleaned
@@ -1620,7 +1533,7 @@ def extract_text_from_uploaded_doc(uploaded_file) -> Tuple[Optional[str], Option
     return None, "Định dạng tệp chưa được hỗ trợ."
 
 
-def fallback_fast_translate(source_text: str, direction: str) -> Dict[str, Any]:
+def fallback_fast_translate(source_text: str, effective_dir: str) -> Dict[str, Any]:
     input_kind = classify_input_type(source_text)
     text_for_trans = source_text.strip()
     detected_slang = detect_slang_in_text(text_for_trans)
@@ -1639,12 +1552,12 @@ def fallback_fast_translate(source_text: str, direction: str) -> Dict[str, Any]:
         expanded_ru = re.sub(rf"\b{re.escape(s_form)}\b", full_rep, expanded_ru, flags=re.IGNORECASE)
 
     with ThreadPoolExecutor(max_workers=3) as executor:
-        if direction == DIRECTION_OPTIONS[0]:
+        if effective_dir == DIRECTION_OPTIONS[1]:  # Nga → Việt
             f_vi = executor.submit(fast_free_translate, expanded_ru, "ru", "vi")
             f_en = executor.submit(fast_free_translate, expanded_ru, "ru", "en")
             vi_ver, en_ver, ru_ver = f_vi.result(), f_en.result(), source_text
             main_trans = vi_ver
-        elif direction == DIRECTION_OPTIONS[1]:
+        elif effective_dir == DIRECTION_OPTIONS[2]:  # Việt → Nga
             f_ru = executor.submit(fast_free_translate, text_for_trans, "vi", "ru")
             f_en = executor.submit(fast_free_translate, text_for_trans, "vi", "en")
             ru_ver, en_ver, vi_ver = f_ru.result(), f_en.result(), source_text
@@ -1673,6 +1586,7 @@ def fallback_fast_translate(source_text: str, direction: str) -> Dict[str, Any]:
 
     return {
         "input_kind": input_kind,
+        "effective_dir": effective_dir,
         "main_translation": main_trans,
         "ru_version": ru_ver,
         "vi_version": vi_ver,
@@ -1713,14 +1627,12 @@ def render_russian_knowledge_hub() -> None:
             <div class="clean-card">
                 <div class="clean-label"><span>Tổng quan 6 cách trong tiếng Nga (Падежи)</span><span>Nền tảng cốt lõi</span></div>
                 <table class="clean-table">
-                    <thead>
-                        <tr><th>Cách</th><th>Câu hỏi</th><th>Chức năng chính</th><th>Giới từ hay gặp</th><th>Ví dụ</th></tr>
-                    </thead>
+                    <thead><tr><th>Cách</th><th>Câu hỏi</th><th>Chức năng chính</th><th>Giới từ hay gặp</th><th>Ví dụ</th></tr></thead>
                     <tbody>
                         <tr><td><b>1. Именительный</b><br/>Nguyên cách</td><td>Кто? Что?</td><td>Chủ ngữ, định nghĩa, dạng gốc trong từ điển</td><td>Không có</td><td><b>Студе́нт</b> у́чится. <b>Кни́га</b> на столе́.</td></tr>
-                        <tr><td><b>2. Родительный</b><br/>Sở hữu cách</td><td>Кого́? Чего́?</td><td>Sở hữu (của ai), phủ định (нет), số lượng (2–4 số ít; ≥5 số nhiều), nơi xuất phát</td><td>у, без, до, из, с, от, о́коло, по́сле, для, кро́ме, во вре́мя</td><td>Нет <b>вре́мени</b>. Два <b>студе́нта</b>. Из <b>Росси́и</b>.</td></tr>
+                        <tr><td><b>2. Родительный</b><br/>Sở hữu cách</td><td>Кого́? Чего́?</td><td>Sở hữu (của ai), phủ định (нет), số lượng (2–4 số ít; ≥5 số nhiều), xuất phát</td><td>у, без, до, из, с, от, о́коло, по́сле, для, кро́ме</td><td>Нет <b>вре́мени</b>. Два <b>студе́нта</b>. Из <b>Росси́и</b>.</td></tr>
                         <tr><td><b>3. Дательный</b><br/>Tặng cách</td><td>Кому́? Чему́?</td><td>Người nhận (cho ai), tuổi tác, trạng thái/cảm xúc (мне ну́жно), đối tượng hướng tới</td><td>к, по, благодаря́, вопреки́</td><td>Помога́ю <b>дру́гу</b>. <b>Мне</b> 21 год. По <b>пла́ну</b>.</td></tr>
-                        <tr><td><b>4. Винительный</b><br/>Đối cách</td><td>Кого́? Что?</td><td>Tân ngữ trực tiếp (đọc gì, gặp ai), hướng chuyển động (куда́?), thứ trong tuần, thời lượng</td><td>в, на (hướng đi), че́рез, за, про</td><td>Чита́ю <b>кни́гу</b>. Иду́ в <b>университе́т</b>. В <b>сре́ду</b>.</td></tr>
+                        <tr><td><b>4. Винительный</b><br/>Đối cách</td><td>Кого́? Что?</td><td>Tân ngữ trực tiếp (đọc gì, gặp ai), hướng chuyển động (куда́?), thứ trong tuần</td><td>в, на (hướng đi), че́рез, за, про</td><td>Чита́ю <b>кни́гу</b>. Иду́ в <b>университе́т</b>. В <b>сре́ду</b>.</td></tr>
                         <tr><td><b>5. Творительный</b><br/>Công cụ cách</td><td>Кем? Чем?</td><td>Công cụ (bằng gì), đi cùng ai (с кем?), nghề nghiệp (стать/рабо́тать), bị động</td><td>с, над, под, пе́ред, за, ме́жду</td><td>Пишу́ <b>ру́чкой</b>. Ко́фе с <b>молоко́м</b>. Ста́ну <b>инжене́ром</b>.</td></tr>
                         <tr><td><b>6. Предложный</b><br/>Giới cách</td><td>О ком? О чём? Где?</td><td>Vị trí tĩnh (ở đâu?), chủ đề (nói/nghĩ về gì), tháng/năm, phương tiện (на метро́)</td><td>в, на (vị trí), о (об), при</td><td>Живу́ в <b>Петербу́рге</b>. Ду́маю об <b>экза́мене</b>.</td></tr>
                     </tbody>
@@ -1728,37 +1640,21 @@ def render_russian_knowledge_hub() -> None:
             </div>
 
             <div class="clean-card">
-                <div class="clean-label"><span>Bảng đuôi Danh từ Số ít (Единственное число)</span></div>
+                <div class="clean-label"><span>Bảng đuôi Danh từ Số ít &amp; Số nhiều</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Cách</th><th>Giống đực (ø / -й / -ь)</th><th>Giống cái (-а / -я / -ь)</th><th>Giống trung (-о / -е / -ие)</th></tr></thead>
+                    <thead><tr><th>Cách</th><th>Đực (ø/-й/-ь)</th><th>Cái (-а/-я/-ь)</th><th>Trung (-о/-е/-ие)</th><th>Số nhiều (Мн. ч.)</th></tr></thead>
                     <tbody>
-                        <tr><td><b>1</b></td><td>ø / -й / -ь</td><td>-а / -я / -ь</td><td>-о / -е / -ие</td></tr>
-                        <tr><td><b>2</b></td><td>-а / -я / -я</td><td>-ы (-и) / -и / -и</td><td>-а / -я / -ия</td></tr>
-                        <tr><td><b>3</b></td><td>-у / -ю / -ю</td><td>-е / -е (-и với -ия) / -и</td><td>-у / -ю / -ию</td></tr>
-                        <tr><td><b>4</b></td><td>Vật = C1 · Người = C2</td><td>-у / -ю / -ь</td><td>Giống Cách 1 (-о / -е / -ие)</td></tr>
-                        <tr><td><b>5</b></td><td>-ом / -ем / -ем</td><td>-ой / -ей / -ью</td><td>-ом / -ем / -ием</td></tr>
-                        <tr><td><b>6</b></td><td>-е (-ии với -ий)</td><td>-е (-ии với -ия; -и với -ь)</td><td>-е (-ии với -ие)</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="clean-card">
-                <div class="clean-label"><span>Bảng đuôi Danh từ Số nhiều (Множественное число)</span><span>Chú ý Cách 2 số nhiều</span></div>
-                <table class="clean-table">
-                    <thead><tr><th>Cách</th><th>Đuôi số nhiều phổ biến</th><th>Ví dụ (студе́нты · кни́ги · общежи́тия)</th></tr></thead>
-                    <tbody>
-                        <tr><td><b>1</b></td><td>-ы / -и (Đực, Cái) · -а / -я (Trung)</td><td>студе́нты, кни́ги, окна́, общежи́тия</td></tr>
-                        <tr><td><b>2</b></td><td><b>-ов / -ев</b> (Đực cứng/-й) · <b>-ей</b> (đuôi -ь, ж/ш/ч/щ) · <b>ø</b> (bỏ đuôi -а/-о) · <b>-ий</b> (từ -ия/-ие)</td><td>студе́нт<b>ов</b>, враче́<b>й</b>, книг<b>ø</b>, окон<b>ø</b>, общежи́т<b>ий</b></td></tr>
-                        <tr><td><b>3</b></td><td>-ам / -ям</td><td>студе́нтам, кни́гам, общежи́тиям</td></tr>
-                        <tr><td><b>4</b></td><td>Vật = Cách 1 số nhiều · Người = Cách 2 số nhiều</td><td>чита́ю кни́ги · ви́жу студе́нтов</td></tr>
-                        <tr><td><b>5</b></td><td>-ами / -ями</td><td>студе́нтами, кни́гами, общежи́тиями</td></tr>
-                        <tr><td><b>6</b></td><td>-ах / -ях</td><td>о студе́нтах, в кни́гах, в общежи́тиях</td></tr>
+                        <tr><td><b>1</b></td><td>ø / -й / -ь</td><td>-а / -я / -ь</td><td>-о / -е / -ие</td><td>-ы / -и · -а / -я</td></tr>
+                        <tr><td><b>2</b></td><td>-а / -я / -я</td><td>-ы(-и) / -и / -и</td><td>-а / -я / -ия</td><td><b>-ов/-ев · -ей · ø · -ий</b></td></tr>
+                        <tr><td><b>3</b></td><td>-у / -ю / -ю</td><td>-е (-и) / -и</td><td>-у / -ю / -ию</td><td>-ам / -ям</td></tr>
+                        <tr><td><b>4</b></td><td>Vật=C1 · Người=C2</td><td>-у / -ю / -ь</td><td>Giống C1</td><td>Vật=C1 · Người=C2</td></tr>
+                        <tr><td><b>5</b></td><td>-ом / -ем / -ем</td><td>-ой / -ей / -ью</td><td>-ом / -ем / -ием</td><td>-ами / -ями</td></tr>
+                        <tr><td><b>6</b></td><td>-е (-ии)</td><td>-е (-ии/-и)</td><td>-е (-ии)</td><td>-ах / -ях</td></tr>
                     </tbody>
                 </table>
                 <div class="note-callout">
-                    <b>2 quy tắc chính tả bắt buộc nhớ:</b><br/>
-                    • <b>Quy tắc 7 chữ cái (г, к, х, ж, ч, ш, щ):</b> Sau 7 âm này không viết <b>«ы»</b>, luôn viết <b>«и»</b> (кни́га → кни́ги).<br/>
-                    • <b>Quy tắc 5 chữ cái (ж, ч, ш, щ, ц):</b> Nếu không có trọng âm thì viết <b>«е»</b> thay vì <b>«о»</b> (това́рищем, хоро́шего).
+                    <b>Quy tắc 7 chữ cái (г, к, х, ж, ч, ш, щ):</b> Không bao giờ viết «ы», luôn đổi thành «и» (кни́га → кни́ги).<br/>
+                    <b>Quy tắc 5 chữ cái (ж, ч, ш, щ, ц):</b> Không có trọng âm thì viết «е» thay cho «о» (това́рищем, хоро́шего).
                 </div>
             </div>
             """
@@ -1768,14 +1664,14 @@ def render_russian_knowledge_hub() -> None:
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Biến cách Tính từ theo 6 cách (Прилагательные)</span><span>VD: но́вый (cứng) / си́ний (mềm)</span></div>
+                <div class="clean-label"><span>Biến cách Tính từ theo 6 cách</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Cách</th><th>Giống đực</th><th>Giống trung</th><th>Giống cái</th><th>Số nhiều (cả 3 giống)</th></tr></thead>
+                    <thead><tr><th>Cách</th><th>Giống đực</th><th>Giống trung</th><th>Giống cái</th><th>Số nhiều</th></tr></thead>
                     <tbody>
                         <tr><td><b>1</b></td><td>-ый / -ой / -ий</td><td>-ое / -ее</td><td>-ая / -яя</td><td>-ые / -ие</td></tr>
                         <tr><td><b>2</b></td><td>-ого / -его</td><td>-ого / -его</td><td>-ой / -ей</td><td>-ых / -их</td></tr>
                         <tr><td><b>3</b></td><td>-ому / -ему</td><td>-ому / -ему</td><td>-ой / -ей</td><td>-ым / -им</td></tr>
-                        <tr><td><b>4</b></td><td>Vật = C1 · Người = C2</td><td>-ое / -ее</td><td>-ую / -юю</td><td>Vật = C1 · Người = C2</td></tr>
+                        <tr><td><b>4</b></td><td>Vật=C1 · Người=C2</td><td>-ое / -ее</td><td>-ую / -юю</td><td>Vật=C1 · Người=C2</td></tr>
                         <tr><td><b>5</b></td><td>-ым / -им</td><td>-ым / -им</td><td>-ой / -ей</td><td>-ыми / -ими</td></tr>
                         <tr><td><b>6</b></td><td>-ом / -ем</td><td>-ом / -ем</td><td>-ой / -ей</td><td>-ых / -их</td></tr>
                     </tbody>
@@ -1783,7 +1679,7 @@ def render_russian_knowledge_hub() -> None:
             </div>
 
             <div class="clean-card">
-                <div class="clean-label"><span>6 Cách của Đại từ nhân xưng (Личные местоимения)</span><span>Dùng hàng ngày</span></div>
+                <div class="clean-label"><span>6 Cách của Đại từ nhân xưng</span></div>
                 <table class="clean-table">
                     <thead><tr><th>Cách</th><th>я</th><th>ты</th><th>он / оно́</th><th>она́</th><th>мы</th><th>вы</th><th>они́</th></tr></thead>
                     <tbody>
@@ -1795,9 +1691,6 @@ def render_russian_knowledge_hub() -> None:
                         <tr><td><b>6</b></td><td>обо мне</td><td>о тебе́</td><td>о нём</td><td>о ней</td><td>о нас</td><td>о вас</td><td>о них</td></tr>
                     </tbody>
                 </table>
-                <div class="note-callout">
-                    <b>Lưu ý thêm chữ «н-»:</b> Với đại từ ngôi 3 (<b>он, она́, оно́, они́</b>), khi đứng ngay sau giới từ luôn thêm <b>н-</b> phía trước (VD: у <b>него́</b>, к <b>ней</b>, с <b>ни́ми</b>).
-                </div>
             </div>
             """
         )
@@ -1806,9 +1699,9 @@ def render_russian_knowledge_hub() -> None:
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Quy tắc chia động từ Hiện tại / Tương lai đơn</span></div>
+                <div class="clean-label"><span>Chia động từ Nhóm I &amp; Nhóm II · Biến âm · Thể НСВ / СВ</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Ngôi</th><th>Nhóm I (đa số -ать, -ять, -еть · чита́ть)</th><th>Nhóm II (đa số -ить · говори́ть)</th></tr></thead>
+                    <thead><tr><th>Ngôi</th><th>Nhóm I (-ать, -ять, -еть · чита́ть)</th><th>Nhóm II (-ить · говори́ть)</th></tr></thead>
                     <tbody>
                         <tr><td><b>я</b></td><td>-у / -ю (чита́ю)</td><td>-у / -ю (говорю́)</td></tr>
                         <tr><td><b>ты</b></td><td>-ешь / -ёшь (чита́ешь)</td><td>-ишь (говори́шь)</td></tr>
@@ -1819,42 +1712,9 @@ def render_russian_knowledge_hub() -> None:
                     </tbody>
                 </table>
                 <div class="note-callout">
-                    <b>Biến âm phụ âm hay gặp ở ngôi «я» (Nhóm II):</b> <b>д → ж</b> (ви́деть → ви́жу), <b>т → ч</b> (плати́ть → плачу́), <b>с → ш</b> (писа́ть → пишу́), <b>б/п/в/м → бл/пл/вл/мл</b> (люби́ть → люблю́, гото́вить → гото́влю).<br/>
-                    <b>Thì quá khứ:</b> Bỏ <b>-ть</b>, thêm <b>-л / -ла / -ло / -ли</b> theo giống/số của chủ ngữ.
+                    <b>Biến âm ở ngôi «я»:</b> д→ж (ви́жу), т→ч (плачу́), с→ш (пишу́), б/п/в/м→бл/пл/вл/мл (люблю́, гото́влю).<br/>
+                    <b>НСВ</b> = quá trình, lặp lại (ка́ждый день, до́лго) · <b>СВ</b> = kết quả dứt điểm 1 lần (уже́, наконе́ц; không có thì hiện tại).
                 </div>
-            </div>
-
-            <div class="clean-card">
-                <div class="clean-label"><span>Phân biệt Thể Chưa Hoàn Thành (НСВ) & Thể Hoàn Thành (СВ)</span></div>
-                <table class="clean-table">
-                    <thead><tr><th>Tiêu chí</th><th>НСВ (Несовершенный вид)</th><th>СВ (Совершенный вид)</th></tr></thead>
-                    <tbody>
-                        <tr><td><b>Bản chất</b></td><td>Quá trình, hành động lặp lại, thói quen, nêu sự thật chung</td><td>Kết quả đã hoàn tất, hành động xảy ra 1 lần dứt điểm</td></tr>
-                        <tr><td><b>Từ dấu hiệu</b></td><td>ка́ждый день, ча́сто, обы́чно, до́лго, всегда́</td><td>уже́, наконе́ц, вдруг, сра́зу, за (2 часа́)</td></tr>
-                        <tr><td><b>Các thì</b></td><td>Quá khứ · Hiện tại · Tương lai (бу́ду + nguyên thể)</td><td>Quá khứ · Tương lai đơn (chia trực tiếp, <b>không có Hiện tại</b>)</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="clean-card">
-                <div class="clean-label"><span>12 cặp động từ НСВ / СВ sinh viên dùng nhiều nhất</span></div>
-                <table class="clean-table">
-                    <thead><tr><th>НСВ (Quá trình)</th><th>СВ (Kết quả)</th><th>Nghĩa tiếng Việt</th></tr></thead>
-                    <tbody>
-                        <tr><td>сдава́ть</td><td>сдать</td><td>Nộp bài / thi (сдал экза́мен = đã qua môn)</td></tr>
-                        <tr><td>писа́ть</td><td>написа́ть</td><td>Viết</td></tr>
-                        <tr><td>учи́ть</td><td>вы́учить</td><td>Học / học thuộc</td></tr>
-                        <tr><td>реша́ть</td><td>реши́ть</td><td>Giải bài / quyết định</td></tr>
-                        <tr><td>понима́ть</td><td>поня́ть</td><td>Hiểu</td></tr>
-                        <tr><td>отправля́ть</td><td>отпра́вить</td><td>Gửi (email, tài liệu)</td></tr>
-                        <tr><td>получа́ть</td><td>получи́ть</td><td>Nhận (học bổng, giấy tờ)</td></tr>
-                        <tr><td>переводи́ть</td><td>перевести́</td><td>Dịch thuật</td></tr>
-                        <tr><td>проверя́ть</td><td>прове́рить</td><td>Kiểm tra / chấm bài</td></tr>
-                        <tr><td>объясня́ть</td><td>объясни́ть</td><td>Giải thích</td></tr>
-                        <tr><td>забыва́ть</td><td>забы́ть</td><td>Quên</td></tr>
-                        <tr><td>продлева́ть</td><td>продли́ть</td><td>Gia hạn (visa, tạm trú)</td></tr>
-                    </tbody>
-                </table>
             </div>
             """
         )
@@ -1863,36 +1723,15 @@ def render_russian_knowledge_hub() -> None:
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Bảng Động từ chuyển động cơ bản (không tiền tố)</span></div>
+                <div class="clean-label"><span>Động từ chuyển động (1 chiều vs Đa chiều) &amp; Tiền tố</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Nghĩa</th><th>1 hướng / Đang diễn ra</th><th>Khứ hồi / Lặp lại / Thói quen</th><th>Ví dụ</th></tr></thead>
+                    <thead><tr><th>Nghĩa</th><th>1 hướng / Đang đi</th><th>Khứ hồi / Thói quen</th><th>Tiền tố hay gặp</th></tr></thead>
                     <tbody>
-                        <tr><td><b>Đi bộ</b></td><td>идти́ (иду́, идёшь)</td><td>ходи́ть (хожу́, хо́дишь)</td><td>Сейча́с иду́ в корпус. Ка́ждый день хожу́ на па́ры.</td></tr>
-                        <tr><td><b>Đi bằng phương tiện</b></td><td>е́хать (е́ду, е́дешь)</td><td>е́здить (е́зжу, е́здишь)</td><td>Е́ду на метро́. Ча́сто е́зжу в центр.</td></tr>
-                        <tr><td><b>Chạy</b></td><td>бежа́ть</td><td>бе́гать</td><td>Бегу́ на пе́рвую па́ру!</td></tr>
-                        <tr><td><b>Mang (đi bộ)</b></td><td>нести́</td><td>носи́ть</td><td>Несу́ чертёж преподава́телю.</td></tr>
-                        <tr><td><b>Chở (bằng xe)</b></td><td>везти́</td><td>вози́ть</td><td>Авто́бус везёт студе́нтов.</td></tr>
-                        <tr><td><b>Dẫn / lái</b></td><td>вести́</td><td>води́ть</td><td>Он во́дит маши́ну.</td></tr>
-                        <tr><td><b>Bay</b></td><td>лете́ть</td><td>лета́ть</td><td>Лечу́ во Вьетна́м ле́том.</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="clean-card">
-                <div class="clean-label"><span>10 Tiền tố không gian thường gặp nhất</span></div>
-                <table class="clean-table">
-                    <thead><tr><th>Tiền tố</th><th>Nghĩa</th><th>Giới từ + Cách đi kèm</th><th>Ví dụ</th></tr></thead>
-                    <tbody>
-                        <tr><td><b>при-</b></td><td>Đến nơi</td><td>в/на + C4 · к + C3</td><td>прийти́ в декана́т (đến văn phòng khoa)</td></tr>
-                        <tr><td><b>у-</b></td><td>Rời đi hẳn</td><td>из/с/от + C2</td><td>уе́хать из го́рода (rời khỏi thành phố)</td></tr>
-                        <tr><td><b>в- / во-</b></td><td>Đi vào trong</td><td>в + C4</td><td>войти́ в аудито́рию (vào giảng đường)</td></tr>
-                        <tr><td><b>вы-</b></td><td>Đi ra ngoài</td><td>из + C2</td><td>вы́йти из общежи́тия (ra khỏi KTX)</td></tr>
-                        <tr><td><b>под-</b></td><td>Tiến lại gần</td><td>к + C3</td><td>подойти́ к преподава́телю (lại gần thầy)</td></tr>
-                        <tr><td><b>от-</b></td><td>Lùi ra xa</td><td>от + C2</td><td>отойти́ от окна́ (rời khỏi cửa sổ)</td></tr>
-                        <tr><td><b>пере-</b></td><td>Đi ngang qua</td><td>че́рез + C4 (hoặc C4 trực tiếp)</td><td>перейти́ у́лицу (sang đường)</td></tr>
-                        <tr><td><b>про-</b></td><td>Đi xuyên qua / đi qua</td><td>ми́мо + C2 · че́рез + C4</td><td>пройти́ ми́мо ко́рпуса (đi ngang qua tòa nhà)</td></tr>
-                        <tr><td><b>за-</b></td><td>Ghé qua / tạt vào</td><td>в/на + C4 · к + C3</td><td>зайти́ в магази́н (ghé qua cửa hàng)</td></tr>
-                        <tr><td><b>до-</b></td><td>Đi tới đích</td><td>до + C2</td><td>дое́хать до метро́ (đi tới ga metro)</td></tr>
+                        <tr><td><b>Đi bộ</b></td><td>идти́ (иду́, идёшь)</td><td>ходи́ть (хожу́, хо́дишь)</td><td>при- (đến), у- (đi khỏi)</td></tr>
+                        <tr><td><b>Đi xe / tàu</b></td><td>е́хать (е́ду, е́дешь)</td><td>е́здить (е́зжу, е́здишь)</td><td>в-/во- (vào), вы- (ra)</td></tr>
+                        <tr><td><b>Mang (đi bộ)</b></td><td>нести́</td><td>носи́ть</td><td>под- (lại gần), от- (rời xa)</td></tr>
+                        <tr><td><b>Chở (xe)</b></td><td>везти́</td><td>вози́ть</td><td>пере- (sang ngang), за- (ghé qua)</td></tr>
+                        <tr><td><b>Bay</b></td><td>лете́ть</td><td>лета́ть</td><td>до- (tới đích), про- (đi qua)</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1903,34 +1742,18 @@ def render_russian_knowledge_hub() -> None:
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Cặp giới từ địa điểm & các từ BẮT BUỘC dùng «НА»</span></div>
+                <div class="clean-label"><span>Giới từ địa điểm (В/НА · ИЗ/С · У/К/ОТ) &amp; Thời gian</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Ở đâu? (Где? · C6)</th><th>Đi đâu? (Куда́? · C4)</th><th>Từ đâu? (Отку́да? · C2)</th><th>Dùng cho</th></tr></thead>
+                    <thead><tr><th>Где? (C6)</th><th>Куда́? (C4)</th><th>Отку́да? (C2)</th><th>Bắt buộc dùng «НА»</th></tr></thead>
                     <tbody>
-                        <tr><td><b>в</b> + Cách 6</td><td><b>в</b> + Cách 4</td><td><b>из</b> + Cách 2</td><td>Không gian kín, tòa nhà, thành phố, quốc gia (в Росси́и, в ко́мнате, в униве́ре)</td></tr>
-                        <tr><td><b>на</b> + Cách 6</td><td><b>на</b> + Cách 4</td><td><b>с</b> + Cách 2</td><td>Sự kiện, buổi học, khoa, không gian mở, phương hướng</td></tr>
-                        <tr><td><b>у</b> + Cách 2</td><td><b>к</b> + Cách 3</td><td><b>от</b> + Cách 2</td><td>Người (у вра́ча, к дека́ну, от преподава́теля)</td></tr>
+                        <tr><td><b>в</b> + C6</td><td><b>в</b> + C4</td><td><b>из</b> + C2</td><td rowspan="3">на факульте́те, на ка́федре, на ку́рсе, на ле́кции, на экза́мене, на пра́ктике, на рабо́те, на по́чте, на вокза́ле, на заво́де</td></tr>
+                        <tr><td><b>на</b> + C6</td><td><b>на</b> + C4</td><td><b>с</b> + C2</td></tr>
+                        <tr><td><b>у</b> + C2</td><td><b>к</b> + C3</td><td><b>от</b> + C2</td></tr>
                     </tbody>
                 </table>
                 <div class="note-callout">
-                    <b>Danh sách bắt buộc dùng «НА» (rất hay thi & dễ nhầm):</b><br/>
-                    на факульте́те, на ка́федре, на ку́рсе, на ле́кции, на семина́ре, на экза́мене, на пра́ктике, на рабо́те, на заво́де, на по́чте, на вокза́ле, на стадио́не, на пло́щади, на у́лице, на се́вере/ю́ге, на Ро́дине.
+                    <b>Thời gian:</b> Thứ (<b>в</b> + C4: в сре́ду) · Tháng (<b>в</b> + C6: в ноябре́) · Ngày (Số thứ tự + Tháng đều <b>C2</b>: пе́рвого сентября́) · Bao lâu nữa (<b>че́рез</b> + C4) · Trước đây (C4 + <b>наза́д</b>).
                 </div>
-            </div>
-
-            <div class="clean-card">
-                <div class="clean-label"><span>Cấu trúc nói Thời gian (Thứ · Ngày · Tháng · Giờ)</span></div>
-                <table class="clean-table">
-                    <thead><tr><th>Hỏi</th><th>Cấu trúc</th><th>Ví dụ</th></tr></thead>
-                    <tbody>
-                        <tr><td><b>Vào thứ mấy?</b></td><td>в + Cách 4</td><td>в понеде́льник, во вто́рник, в сре́ду, в четве́рг, в пя́тницу, в суббо́ту, в воскресе́нье</td></tr>
-                        <tr><td><b>Vào tháng mấy?</b></td><td>в + Cách 6</td><td>в январе́, в феврале́, в ма́рте, в сентябре́, в ноябре́, в декабре́</td></tr>
-                        <tr><td><b>Vào ngày mấy?</b></td><td>Số thứ tự (trung) + Tháng (đều <b>Cách 2</b>)</td><td>пе́рвого сентября́ (1/9), два́дцать шесто́го ноября́ (26/11)</td></tr>
-                        <tr><td><b>Lúc mấy giờ?</b></td><td>в + số giờ (Cách 4)</td><td>в час (1h), в два часа́ (2h), в пять часо́в (5h), без де́сяти два (2h kém 10)</td></tr>
-                        <tr><td><b>Bao lâu nữa?</b></td><td>че́рез + Cách 4</td><td>че́рез неде́лю (1 tuần nữa), че́рез два дня (2 ngày nữa)</td></tr>
-                        <tr><td><b>Cách đây bao lâu?</b></td><td>Cách 4 + наза́д</td><td>три дня наза́д (3 ngày trước), год наза́д (1 năm trước)</td></tr>
-                    </tbody>
-                </table>
             </div>
             """
         )
@@ -1939,20 +1762,15 @@ def render_russian_knowledge_hub() -> None:
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Quy tắc sống còn khi ghép Số đếm với Danh từ</span></div>
+                <div class="clean-label"><span>Quy tắc ghép Số đếm với Danh từ</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Số tận cùng bằng</th><th>Cách của Danh từ</th><th>Ví dụ: рубль (rúp)</th><th>Ví dụ: год (năm)</th><th>Ví dụ: час (giờ)</th></tr></thead>
+                    <thead><tr><th>Số tận cùng</th><th>Cách của Danh từ</th><th>рубль</th><th>год</th><th>час</th></tr></thead>
                     <tbody>
-                        <tr><td><b>1</b> (1, 21, 31... trừ 11)</td><td><b>Cách 1 số ít</b></td><td>оди́н рубль</td><td>оди́н год</td><td>оди́н час</td></tr>
-                        <tr><td><b>2, 3, 4</b> (2–4, 22–24... trừ 12–14)</td><td><b>Cách 2 số ít</b></td><td>два рубля́</td><td>три го́да</td><td>четы́ре часа́</td></tr>
-                        <tr><td><b>5–20, 0</b> và <b>мно́го / ма́ло / ско́лько / не́сколько</b></td><td><b>Cách 2 số nhiều</b></td><td>пять рубле́й</td><td>пять <b>лет</b></td><td>пять часо́в</td></tr>
+                        <tr><td><b>1</b> (trừ 11)</td><td>Cách 1 số ít</td><td>оди́н рубль</td><td>оди́н год</td><td>оди́н час</td></tr>
+                        <tr><td><b>2, 3, 4</b> (trừ 12–14)</td><td>Cách 2 số ít</td><td>два рубля́</td><td>три го́да</td><td>четы́ре часа́</td></tr>
+                        <tr><td><b>5–20, 0, мно́го, ма́ло</b></td><td>Cách 2 số nhiều</td><td>пять рубле́й</td><td>пять <b>лет</b></td><td>пять часо́в</td></tr>
                     </tbody>
                 </table>
-                <div class="note-callout">
-                    <b>Lưu ý về Tính từ đi cùng số 2, 3, 4:</b><br/>
-                    • Với danh từ giống đực/trung: Tính từ chia <b>Cách 2 số nhiều</b> (два <b>но́вых</b> студе́нта).<br/>
-                    • Với danh từ giống cái: Tính từ thường chia <b>Cách 1 số nhiều</b> (две <b>но́вые</b> кни́ги).
-                </div>
             </div>
             """
         )
@@ -1961,16 +1779,14 @@ def render_russian_knowledge_hub() -> None:
         render_html(
             """
             <div class="clean-card">
-                <div class="clean-label"><span>Cấu trúc câu ghép & Từ nối học thuật (Dùng viết tiểu luận / đồ án)</span></div>
+                <div class="clean-label"><span>Cấu trúc câu ghép &amp; Từ nối học thuật</span></div>
                 <table class="clean-table">
-                    <thead><tr><th>Từ nối / Cấu trúc</th><th>Quy tắc ngữ pháp</th><th>Ví dụ</th></tr></thead>
+                    <thead><tr><th>Từ nối</th><th>Quy tắc</th><th>Ví dụ</th></tr></thead>
                     <tbody>
-                        <tr><td><b>что́бы</b> (để mà)</td><td>Cùng chủ ngữ: <b>что́бы + nguyên thể</b><br/>Khác chủ ngữ: <b>что́бы + thì Quá khứ</b></td><td>Я учу́сь, что́бы <b>получи́ть</b> дипло́м.<br/>Преподава́тель хо́чет, что́бы мы <b>сда́ли</b> рабо́ту.</td></tr>
-                        <tr><td><b>кото́рый</b> (mà / cái mà)</td><td>Giống & số theo danh từ đứng trước; <b>Cách</b> theo vai trò trong mệnh đề sau</td><td>Кни́га, <b>кото́рую</b> я чита́ю (C4).<br/>Университе́т, в <b>кото́ром</b> я учу́сь (C6).</td></tr>
-                        <tr><td><b>потому́ что / поэ́тому</b></td><td>потому́ что (bởi vì) · поэ́тому (vì vậy)</td><td>Я уста́л, <b>потому́ что</b> мно́го рабо́тал.</td></tr>
-                        <tr><td><b>благодаря́ + C3 / из-за + C2</b></td><td>благодаря́ (nhờ vào · tích cực)<br/>из-за (tại vì · tiêu cực)</td><td><b>Благодаря́</b> по́мощи дру́га (C3).<br/><b>Из-за</b> плохо́й пого́ды (C2).</td></tr>
-                        <tr><td><b>несмотря́ на + C4 / хотя́</b></td><td>Mặc dù</td><td><b>Несмотря́ на</b> сло́жность зада́чи, мы реши́ли её.</td></tr>
-                        <tr><td><b>е́сли ..., то ...</b></td><td>Nếu ... thì ... (Điều kiện giả định dùng <b>е́сли бы + quá khứ</b>)</td><td><b>Е́сли</b> у тебя́ есть вопро́сы, <b>то</b> напиши́ мне.</td></tr>
+                        <tr><td><b>что́бы</b></td><td>Cùng chủ ngữ: nguyên thể · Khác chủ ngữ: <b>Quá khứ</b></td><td>Я хочу́, что́бы ты <b>пришёл</b>.</td></tr>
+                        <tr><td><b>кото́рый</b></td><td>Giống &amp; số theo danh từ trước; Cách theo mệnh đề sau</td><td>Кни́га, <b>кото́рую</b> я чита́ю (C4).</td></tr>
+                        <tr><td><b>благодаря́ / из-за</b></td><td>благодаря́ + C3 (nhờ vào) · из-за + C2 (tại vì)</td><td>Благодаря́ по́мощи · Из-за дождя́.</td></tr>
+                        <tr><td><b>несмотря́ на</b></td><td>+ Cách 4 (mặc dù)</td><td>Несмотря́ на сло́жность зада́чи...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1979,7 +1795,7 @@ def render_russian_knowledge_hub() -> None:
 
 
 # ==============================================================================
-# 7. QUẢN LÝ SỔ TỪ VỰNG, FLASHCARDS & TRẮC NGHIỆM ÔN TẬP (TAB 2)
+# 7. TỪ VỰNG & ÔN TẬP ĐỒNG BỘ TÀI KHOẢN (FLASHCARDS + QUIZ 2 CHIỀU + CSV IMPORT/EXPORT)
 # ==============================================================================
 def add_vocab_items_to_notebook(items: List[Dict[str, str]]) -> int:
     if "saved_vocab_notebook" not in st.session_state:
@@ -2000,6 +1816,8 @@ def add_vocab_items_to_notebook(items: List[Dict[str, str]]) -> int:
             )
             existing.add(ru_k.lower())
             added += 1
+    if added > 0:
+        sync_current_account_to_db()
     return added
 
 
@@ -2012,58 +1830,88 @@ def export_vocab_to_anki_csv(vocab_list: List[Dict[str, str]]) -> bytes:
     return ("\ufeff" + output.getvalue()).encode("utf-8")
 
 
-def _generate_quiz_question(pool: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _generate_quiz_question(pool: List[Dict[str, Any]], quiz_dir: str = "ru_to_vi") -> Optional[Dict[str, Any]]:
     if len(pool) < 4:
         return None
     target = random.choice(pool)
     distractors = random.sample([x for x in pool if x["ru_accent"] != target["ru_accent"]], 3)
+    if quiz_dir == "vi_to_ru":
+        options = [target["ru_accent"]] + [d["ru_accent"] for d in distractors]
+        random.shuffle(options)
+        return {
+            "prompt": target["vi"],
+            "correct": target["ru_accent"],
+            "sub_hint": "Chọn từ tiếng Nga tương ứng:",
+            "options": options,
+            "answered": None,
+        }
     options = [target["vi"]] + [d["vi"] for d in distractors]
     random.shuffle(options)
     return {
-        "prompt_ru": target["ru_accent"],
-        "correct_vi": target["vi"],
-        "en": target.get("en", ""),
+        "prompt": target["ru_accent"],
+        "correct": target["vi"],
+        "sub_hint": "Chọn nghĩa tiếng Việt đúng:",
         "options": options,
         "answered": None,
     }
 
 
 def render_vocab_and_practice_tab() -> None:
+    saved_list = st.session_state["saved_vocab_notebook"]
+    mastered_cnt = sum(1 for v in saved_list if v.get("mastered"))
+    unmastered_cnt = len(saved_list) - mastered_cnt
+    pct = int(round((mastered_cnt / len(saved_list)) * 100)) if saved_list else 0
+
+    if not st.session_state.get("auth_username"):
+        st.info("Đăng nhập hoặc tạo tài khoản ở thanh bên trái để lưu vĩnh viễn và đồng bộ Sổ từ vựng + Lịch sử trên mọi thiết bị.")
+
+    render_html(
+        f"""
+        <div class="stat-grid">
+            <div class="stat-box"><div class="stat-num">{len(saved_list)}</div><div class="stat-lbl">Tổng từ trong sổ</div></div>
+            <div class="stat-box"><div class="stat-num">{mastered_cnt}</div><div class="stat-lbl">Đã thuộc ({pct}%)</div></div>
+            <div class="stat-box"><div class="stat-num">{unmastered_cnt}</div><div class="stat-lbl">Cần ôn lại</div></div>
+        </div>
+        """
+    )
+
     mode = st.radio(
         "Chế độ học từ vựng",
-        options=["Thẻ ghi nhớ (Flashcards)", "Trắc nghiệm nhanh (Quiz)", "Sổ từ vựng & Tiếng lóng"],
+        options=["Thẻ ghi nhớ (Flashcards)", "Trắc nghiệm (Quiz)", "Quản lý sổ & Tiếng lóng"],
         horizontal=True,
         label_visibility="collapsed",
     )
 
-    saved_list = st.session_state["saved_vocab_notebook"]
     slang_deck = [
         {"ru_accent": f"{x['accent']} ({x['full']})", "vi": x["vi"], "en": x["en"], "mastered": False}
         for x in RUSSIAN_SLANG_DICT
     ]
 
     if mode == "Thẻ ghi nhớ (Flashcards)":
-        fc_top1, fc_top2 = st.columns([2, 1.5])
-        with fc_top1:
+        fc1, fc2 = st.columns([2.2, 1])
+        with fc1:
             deck_choice = st.selectbox(
-                "Bộ thẻ ôn tập",
-                options=["Sổ từ vựng đã lưu", "Từ chưa thuộc trong sổ", "30 từ lóng sinh viên Nga"],
+                "Bộ thẻ",
+                options=["Từ chưa thuộc trong sổ", "Tất cả từ trong sổ", "30 từ lóng sinh viên Nga"],
                 label_visibility="collapsed",
             )
-        if deck_choice == "Sổ từ vựng đã lưu":
-            active_deck = saved_list
-        elif deck_choice == "Từ chưa thuộc trong sổ":
+        with fc2:
+            if st.button("Xáo trộn thẻ", use_container_width=True):
+                if saved_list:
+                    random.shuffle(saved_list)
+                st.session_state["flashcard_index"] = 0
+                st.session_state["flashcard_show_back"] = False
+                st.rerun()
+
+        if deck_choice == "Từ chưa thuộc trong sổ":
             active_deck = [v for v in saved_list if not v.get("mastered")]
+        elif deck_choice == "Tất cả từ trong sổ":
+            active_deck = saved_list
         else:
             active_deck = slang_deck
 
-        with fc_top2:
-            if saved_list:
-                mastered_cnt = sum(1 for v in saved_list if v.get("mastered"))
-                st.caption(f"Tiến độ sổ cá nhân: Đã thuộc **{mastered_cnt} / {len(saved_list)}** từ")
-
         if not active_deck:
-            st.info("Chưa có từ trong bộ thẻ này. Bạn có thể lưu từ sau khi dịch ở Tab 1, hoặc chọn bộ «30 từ lóng sinh viên Nga» để ôn ngay.")
+            st.info("Không có thẻ nào trong bộ này. Hãy lưu từ ở Tab 1, hoặc chọn bộ «30 từ lóng sinh viên Nga».")
             return
 
         idx = st.session_state["flashcard_index"] % len(active_deck)
@@ -2073,7 +1921,7 @@ def render_vocab_and_practice_tab() -> None:
         back_html = (
             f'<div class="flashcard-back">{esc(card["vi"])}<div style="font-size:0.9rem;opacity:0.75;font-weight:400;margin-top:4px;">{esc(card.get("en",""))}</div></div>'
             if st.session_state["flashcard_show_back"]
-            else '<div style="margin-top:12px;font-size:0.86rem;opacity:0.7;">Bấm «Lật thẻ» để kiểm tra nghĩa</div>'
+            else '<div style="margin-top:12px;font-size:0.86rem;opacity:0.7;">Bấm «Lật thẻ» để xem nghĩa</div>'
         )
         render_html(
             f"""
@@ -2103,12 +1951,13 @@ def render_vocab_and_practice_tab() -> None:
                     st.audio(ab, format="audio/mp3")
         with b4:
             if deck_choice != "30 từ lóng sinh viên Nga":
-                lbl = "Bỏ đã thuộc" if card.get("mastered") else "Đã thuộc ✓"
+                lbl = "Ôn lại" if card.get("mastered") else "Đã thuộc ✓"
                 if st.button(lbl, use_container_width=True):
                     for item in saved_list:
                         if item["ru_accent"] == card["ru_accent"]:
                             item["mastered"] = not item.get("mastered", False)
                             break
+                    sync_current_account_to_db()
                     st.session_state["flashcard_show_back"] = False
                     st.rerun()
             else:
@@ -2121,25 +1970,33 @@ def render_vocab_and_practice_tab() -> None:
                 st.session_state["flashcard_show_back"] = False
                 st.rerun()
 
-    elif mode == "Trắc nghiệm nhanh (Quiz)":
-        pool = saved_list if len(saved_list) >= 4 else slang_deck
-        source_note = (
-            f"Đang luyện từ Sổ cá nhân ({len(saved_list)} từ)"
-            if len(saved_list) >= 4
-            else "Đang luyện từ bộ 30 từ lóng sinh viên Nga (lưu từ 4 từ trở lên ở Tab 1 để luyện sổ cá nhân)"
-        )
-        st.caption(f"{source_note} · Điểm phiên này: **{st.session_state['quiz_score']} / {st.session_state['quiz_total']}**")
+    elif mode == "Trắc nghiệm (Quiz)":
+        qc1, qc2 = st.columns([2, 1.5])
+        with qc1:
+            quiz_dir_label = st.radio(
+                "Chiều kiểm tra",
+                options=["Nga → Việt", "Việt → Nga"],
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+            q_dir = "vi_to_ru" if quiz_dir_label == "Việt → Nga" else "ru_to_vi"
+        with qc2:
+            st.caption(f"Điểm: **{st.session_state['quiz_score']} / {st.session_state['quiz_total']}**")
 
-        if st.session_state.get("current_quiz") is None:
-            st.session_state["current_quiz"] = _generate_quiz_question(pool)
+        unmastered_pool = [v for v in saved_list if not v.get("mastered")]
+        pool = unmastered_pool if len(unmastered_pool) >= 4 else (saved_list if len(saved_list) >= 4 else slang_deck)
+
+        if st.session_state.get("current_quiz") is None or st.session_state.get("last_quiz_dir") != q_dir:
+            st.session_state["last_quiz_dir"] = q_dir
+            st.session_state["current_quiz"] = _generate_quiz_question(pool, q_dir)
 
         q = st.session_state["current_quiz"]
         if q:
             render_html(
                 f"""
                 <div class="clean-card" style="text-align:center;padding:24px;">
-                    <div style="font-size:0.82rem;opacity:0.7;margin-bottom:6px;">Chọn nghĩa tiếng Việt đúng của từ sau:</div>
-                    <div style="font-size:1.6rem;font-weight:700;">{esc(q['prompt_ru'])}</div>
+                    <div style="font-size:0.82rem;opacity:0.7;margin-bottom:6px;">{esc(q['sub_hint'])}</div>
+                    <div style="font-size:1.55rem;font-weight:700;">{esc(q['prompt'])}</div>
                 </div>
                 """
             )
@@ -2147,35 +2004,54 @@ def render_vocab_and_practice_tab() -> None:
                 if st.button(opt, key=f"quiz_opt_{opt_i}", use_container_width=True, disabled=q["answered"] is not None):
                     q["answered"] = opt
                     st.session_state["quiz_total"] += 1
-                    if opt == q["correct_vi"]:
+                    if opt == q["correct"]:
                         st.session_state["quiz_score"] += 1
                     st.rerun()
 
             if q["answered"] is not None:
-                if q["answered"] == q["correct_vi"]:
-                    st.success(f"Chính xác: {q['prompt_ru']} = {q['correct_vi']}")
+                if q["answered"] == q["correct"]:
+                    st.success(f"Chính xác: {q['prompt']} = {q['correct']}")
                 else:
-                    st.error(f"Chưa đúng. Đáp án đúng là: {q['correct_vi']}")
+                    st.error(f"Chưa đúng. Đáp án đúng là: {q['correct']}")
                 if st.button("Câu tiếp theo", type="primary"):
-                    st.session_state["current_quiz"] = _generate_quiz_question(pool)
+                    st.session_state["current_quiz"] = _generate_quiz_question(pool, q_dir)
                     st.rerun()
 
     else:
-        col_left, col_right = st.columns([1.05, 1.0])
+        col_left, col_right = st.columns([1.1, 1.0])
         with col_left:
             st.markdown("#### Sổ từ vựng cá nhân")
-            with st.expander("Thêm từ mới thủ công"):
+            with st.expander("Thêm từ thủ công hoặc nhập từ file CSV"):
                 with st.form("add_manual_vocab", clear_on_submit=True):
-                    m_ru = st.text_input("Tiếng Nga (có thể kèm trọng âm)", placeholder="VD: осто́йчивость")
+                    m_ru = st.text_input("Tiếng Nga (kèm trọng âm)", placeholder="VD: осто́йчивость")
                     m_vi = st.text_input("Nghĩa tiếng Việt", placeholder="VD: Tính ổn định (của tàu)")
                     m_en = st.text_input("Tiếng Anh (tùy chọn)", placeholder="VD: stability")
                     if st.form_submit_button("Thêm vào sổ", type="primary", use_container_width=True):
                         if m_ru.strip() and m_vi.strip():
                             add_vocab_items_to_notebook([{"ru_accent": m_ru.strip(), "vi": m_vi.strip(), "en": m_en.strip()}])
-                            st.toast("Đã thêm từ mới.")
+                            st.toast("Đã thêm và đồng bộ từ mới.")
                             st.rerun()
+                csv_up = st.file_uploader("Nhập danh sách từ file CSV (cột: Tiếng Nga, Tiếng Việt)", type=["csv"])
+                if csv_up is not None and st.button("Nhập từ CSV vào sổ", use_container_width=True):
+                    try:
+                        decoded = csv_up.getvalue().decode("utf-8-sig")
+                        reader = csv.reader(io.StringIO(decoded))
+                        new_items = []
+                        for r_idx, row in enumerate(reader):
+                            if len(row) >= 2 and not (r_idx == 0 and "tieng_nga" in row[0].lower()):
+                                new_items.append({"ru_accent": row[0].strip(), "vi": row[1].strip(), "en": row[2].strip() if len(row) > 2 else ""})
+                        cnt = add_vocab_items_to_notebook(new_items)
+                        st.toast(f"Đã nhập {cnt} từ mới từ CSV.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Lỗi đọc CSV: {exc}")
 
             if saved_list:
+                q_my = st.text_input("Tìm trong sổ của bạn", placeholder="Gõ tiếng Nga hoặc tiếng Việt...", label_visibility="collapsed")
+                filtered_my = [
+                    (i, v) for i, v in enumerate(saved_list)
+                    if not q_my.strip() or q_my.lower() in v["ru_accent"].lower() or q_my.lower() in v["vi"].lower()
+                ]
                 st.download_button(
                     f"Xuất {len(saved_list)} từ ra CSV (Anki / Excel)",
                     data=export_vocab_to_anki_csv(saved_list),
@@ -2183,25 +2059,23 @@ def render_vocab_and_practice_tab() -> None:
                     mime="text/csv",
                     use_container_width=True,
                 )
-                rows = "".join(
-                    f"<tr><td><b>{esc(v['ru_accent'])}</b></td><td>{esc(v['vi'])}</td><td>{'Đã thuộc' if v.get('mastered') else 'Chưa thuộc'}</td></tr>"
-                    for v in saved_list
-                )
-                render_html(
-                    f"""
-                    <div class="clean-card" style="padding:0;max-height:360px;overflow-y:auto;">
-                        <table class="clean-table" style="margin-top:0;">
-                            <thead><tr><th>Tiếng Nga</th><th>Nghĩa tiếng Việt</th><th>Trạng thái</th></tr></thead>
-                            <tbody>{rows}</tbody>
-                        </table>
-                    </div>
-                    """
-                )
-                if st.button("Xóa toàn bộ sổ từ vựng", use_container_width=True):
-                    st.session_state["saved_vocab_notebook"] = []
-                    st.rerun()
+                for orig_i, v in filtered_my[:25]:
+                    rc1, rc2, rc3 = st.columns([3.6, 1.2, 0.7])
+                    with rc1:
+                        st.markdown(f"**{v['ru_accent']}** — {v['vi']}")
+                    with rc2:
+                        st_lbl = "Đã thuộc" if v.get("mastered") else "Chưa thuộc"
+                        if st.button(st_lbl, key=f"tog_v_{orig_i}", use_container_width=True):
+                            saved_list[orig_i]["mastered"] = not v.get("mastered", False)
+                            sync_current_account_to_db()
+                            st.rerun()
+                    with rc3:
+                        if st.button("×", key=f"del_v_{orig_i}", use_container_width=True):
+                            saved_list.pop(orig_i)
+                            sync_current_account_to_db()
+                            st.rerun()
             else:
-                st.caption("Sổ từ vựng đang trống. Dịch ở Tab 1 rồi bấm «Lưu từ vựng vào sổ ôn tập» hoặc thêm thủ công ở trên.")
+                st.caption("Sổ từ vựng đang trống. Hãy lưu từ sau khi tra ở Tab 1 hoặc thêm thủ công.")
 
         with col_right:
             st.markdown("#### Tra nhanh 30 từ lóng sinh viên Nga")
@@ -2230,21 +2104,23 @@ def render_vocab_and_practice_tab() -> None:
 
 
 # ==============================================================================
-# 8. HIỂN THỊ KẾT QUẢ DỊCH (GỒM ĐỒNG NGHĨA / TRÁI NGHĨA) & KHỞI TẠO SESSION
+# 8. HIỂN THỊ KẾT QUẢ DỊCH & KHỞI TẠO PHIÊN ĐĂNG NHẬP BỀN VỮNG
 # ==============================================================================
 def init_session_state() -> None:
     defaults: Dict[str, Any] = {
+        "auth_username": "",
+        "auth_password_hash": "",
         "input_text_area": "",
         "selected_direction": DIRECTION_OPTIONS[0],
         "is_author_admin": False,
         "saved_gemini_api_key": "",
         "theme_mode": "light",
-        "declined_keys": set(),
         "translation_history": [],
         "saved_vocab_notebook": [],
         "flashcard_index": 0,
         "flashcard_show_back": False,
         "current_quiz": None,
+        "last_quiz_dir": "ru_to_vi",
         "quiz_score": 0,
         "quiz_total": 0,
         "last_meta_badge": "",
@@ -2253,33 +2129,32 @@ def init_session_state() -> None:
         if k not in st.session_state:
             st.session_state[k] = v
 
-    rec_key, rec_prof, rec_theme = load_persisted_user_data()
-    if rec_key and not st.session_state["saved_gemini_api_key"]:
-        st.session_state["saved_gemini_api_key"] = rec_key
-    if rec_prof and not st.session_state.get("confirmed_user_name"):
-        st.session_state["confirmed_user_name"] = rec_prof["full_name"]
-        st.session_state["confirmed_user_year"] = rec_prof["student_year"]
-        st.session_state["confirmed_user_uni"] = rec_prof["university"]
-    if not st.session_state.get("theme_initialized"):
-        st.session_state["theme_initialized"] = True
-        st.session_state["theme_mode"] = rec_theme
-
-    if not st.session_state.get("ls_bootstrapped_this_session"):
-        st.session_state["ls_bootstrapped_this_session"] = True
-        if not st.session_state.get("saved_gemini_api_key") or not st.session_state.get("confirmed_user_name"):
-            persist_browser_state("bootstrap_from_localstorage")
+    # TỰ ĐỘNG KHÔI PHỤC TÀI KHOẢN QUA MỌI LẦN F5 BẰNG TOKEN ĐÃ KÝ HMAC TRÊN ?s=...
+    if not st.session_state["auth_username"]:
+        try:
+            tok = str(st.query_params.get("s", "")).strip()
+            if tok:
+                uname = verify_session_token(tok)
+                if uname:
+                    user_payload = db_get_user(uname)
+                    if user_payload:
+                        apply_user_payload_to_session(uname, user_payload)
+        except Exception:
+            pass
 
 
 def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: bool = False) -> None:
     kind_labels = {"word": "Tra từ", "sentence": "Phân tích câu", "paragraph": "Dịch đoạn văn"}
     kind_text = kind_labels.get(res.get("input_kind", ""), "Bản dịch")
+    eff_dir = res.get("effective_dir", "")
+    header_left = f"{kind_text} · {eff_dir}" if eff_dir else kind_text
     main_trans = res.get("main_translation", "")
 
     render_html(
         f"""
         <div class="clean-card">
             <div class="clean-label">
-                <span>{esc(kind_text)}</span>
+                <span>{esc(header_left)}</span>
                 <span>{esc(meta_badge)}</span>
             </div>
             <div class="clean-result-text">{esc(main_trans)}</div>
@@ -2297,7 +2172,6 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: boo
             if audio_b:
                 st.audio(audio_b, format="audio/mp3")
 
-    # 1. CHIA 6 CÁCH HOẶC CHIA ĐỘNG TỪ
     morph = res.get("morphology") or {}
     cases_table = morph.get("cases_table") or []
     verb_conj = morph.get("verb_conjugation") or {}
@@ -2348,41 +2222,19 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: boo
         if usage_note:
             render_html(f'<div class="note-callout"><b>Cách dùng ({esc(meta_line)}):</b> {esc(usage_note)}</div>')
 
-    # 2. TỪ ĐỒNG NGHĨA & TRÁI NGHĨA (СИНОНИМЫ / АНТОНИМЫ)
     synonyms = res.get("synonyms") or []
     antonyms = res.get("antonyms") or []
     if synonyms or antonyms:
         sa_c1, sa_c2 = st.columns(2)
         with sa_c1:
             if synonyms:
-                s_items = "".join(
-                    f"<div class='syn-ant-item'><b>{esc(s['ru'])}</b> — {esc(s['vi'])}</div>"
-                    for s in synonyms
-                )
-                render_html(
-                    f"""
-                    <div class="clean-card" style="margin-top:8px;">
-                        <div class="clean-label"><span>Từ đồng nghĩa (Синонимы)</span></div>
-                        {s_items}
-                    </div>
-                    """
-                )
+                s_items = "".join(f"<div class='syn-ant-item'><b>{esc(s['ru'])}</b> — {esc(s['vi'])}</div>" for s in synonyms)
+                render_html(f'<div class="clean-card" style="margin-top:8px;"><div class="clean-label"><span>Từ đồng nghĩa (Синонимы)</span></div>{s_items}</div>')
         with sa_c2:
             if antonyms:
-                a_items = "".join(
-                    f"<div class='syn-ant-item'><b>{esc(a['ru'])}</b> — {esc(a['vi'])}</div>"
-                    for a in antonyms
-                )
-                render_html(
-                    f"""
-                    <div class="clean-card" style="margin-top:8px;">
-                        <div class="clean-label"><span>Từ trái nghĩa (Антонимы)</span></div>
-                        {a_items}
-                    </div>
-                    """
-                )
+                a_items = "".join(f"<div class='syn-ant-item'><b>{esc(a['ru'])}</b> — {esc(a['vi'])}</div>" for a in antonyms)
+                render_html(f'<div class="clean-card" style="margin-top:8px;"><div class="clean-label"><span>Từ trái nghĩa (Антонимы)</span></div>{a_items}</div>')
 
-    # 3. GIẢI THÍCH NGỮ PHÁP TRONG CÂU / ĐOẠN
     sent_grammar = res.get("sentence_grammar") or []
     if sent_grammar:
         g_rows = "".join(
@@ -2401,7 +2253,6 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: boo
             """
         )
 
-    # 4. VÍ DỤ ÁP DỤNG THEO NGỮ CẢNH
     examples = res.get("context_examples") or []
     if examples:
         ex_html = "".join(
@@ -2414,14 +2265,7 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: boo
             """
             for ex in examples
         )
-        render_html(
-            f"""
-            <div class="clean-card">
-                <div class="clean-label"><span>Ví dụ áp dụng theo ngữ cảnh</span></div>
-                {ex_html}
-            </div>
-            """
-        )
+        render_html(f'<div class="clean-card"><div class="clean-label"><span>Ví dụ áp dụng theo ngữ cảnh</span></div>{ex_html}</div>')
         ex_btn_cols = st.columns(min(3, len(examples)))
         for idx, ex in enumerate(examples[:3]):
             with ex_btn_cols[idx]:
@@ -2439,7 +2283,7 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: boo
         render_html(
             f"""
             <div class="clean-card">
-                <div class="clean-label"><span>Tiếng lóng &amp; viết tắt trong văn bản</span></div>
+                <div class="clean-label"><span>Tiếng lóng &amp; viết tắt</span></div>
                 <table class="clean-table">
                     <thead><tr><th>Từ lóng</th><th>Dạng đầy đủ</th><th>Giải nghĩa</th></tr></thead>
                     <tbody>{slang_rows}</tbody>
@@ -2467,7 +2311,7 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: boo
         )
         if st.button("Lưu từ vựng vào sổ ôn tập", key="btn_save_vocab"):
             added = add_vocab_items_to_notebook(vocab_table)
-            st.toast(f"Đã lưu {added} từ mới." if added else "Các từ này đã có trong sổ.")
+            st.toast(f"Đã lưu {added} từ mới vào sổ." if added else "Các từ này đã có trong sổ.")
 
     if res.get("context_note"):
         render_html(f'<div class="note-callout">{esc(res["context_note"])}</div>')
@@ -2486,7 +2330,7 @@ def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: boo
 
 
 # ==============================================================================
-# 9. GIAO DIỆN CHÍNH (SIDEBAR + HEADER TÁC GIẢ + CHUYỂN NỀN SÁNG/TỐI + 3 TAB)
+# 9. GIAO DIỆN CHÍNH (ĐĂNG NHẬP ĐỒNG BỘ + HEADER TÁC GIẢ + SÁNG/TỐI + 3 TAB)
 # ==============================================================================
 def main() -> None:
     init_session_state()
@@ -2510,44 +2354,96 @@ def main() -> None:
             """
         )
 
-        # Ghi bền vững vào Cookie/localStorage sau rerun
-        if st.session_state.get("pending_key_save"):
-            persist_browser_state("save_key", api_key=st.session_state.pop("pending_key_save"))
-        if st.session_state.get("pending_key_delete"):
-            st.session_state.pop("pending_key_delete")
-            persist_browser_state("delete_key")
-        if st.session_state.get("pending_profile_save"):
-            persist_browser_state("save_profile", student_profile=st.session_state.pop("pending_profile_save"))
-        if st.session_state.get("pending_theme_save"):
-            persist_browser_state("save_theme", theme_mode=st.session_state.pop("pending_theme_save"))
-
-        # CHỌN NỀN SÁNG / TỐI TRONG SIDEBAR
-        st.markdown("#### Giao diện")
-        theme_label = "Nền tối (Chữ trắng)" if is_dark else "Nền sáng (Chữ đen)"
-        if st.button(f"Đổi sang {'Nền sáng' if is_dark else 'Nền tối'}", key="sb_theme_toggle", use_container_width=True):
-            new_mode = "light" if is_dark else "dark"
-            st.session_state["theme_mode"] = new_mode
-            st.session_state["pending_theme_save"] = new_mode
-            st.rerun()
-        st.caption(f"Đang dùng: {theme_label}")
+        # 1. TÀI KHOẢN ĐĂNG NHẬP & ĐỒNG BỘ ĐA THIẾT BỊ
+        st.markdown("#### Tài khoản & Đồng bộ")
+        sync_badge = "Cloud Supabase (Đa thiết bị)" if _is_cloud_sync_enabled() else "SQLite cục bộ"
+        if st.session_state["auth_username"]:
+            uname = st.session_state["auth_username"]
+            sv_name = st.session_state.get("confirmed_user_name") or uname
+            sv_uni = st.session_state.get("confirmed_user_uni") or ""
+            st.success(f"Đang đăng nhập: **{sv_name}** (`@{uname}`)" + (f" · {sv_uni}" if sv_uni else ""))
+            st.caption(f"Đồng bộ: {sync_badge} · Tự giữ phiên khi F5")
+            if st.button("Đăng xuất", use_container_width=True):
+                st.session_state["auth_username"] = ""
+                st.session_state["auth_password_hash"] = ""
+                st.session_state["saved_gemini_api_key"] = ""
+                st.session_state["saved_vocab_notebook"] = []
+                st.session_state["translation_history"] = []
+                try:
+                    if "s" in st.query_params:
+                        del st.query_params["s"]
+                except Exception:
+                    pass
+                st.rerun()
+        else:
+            auth_mode = st.radio("Chế độ tài khoản", ["Đăng nhập", "Đăng ký mới"], horizontal=True, label_visibility="collapsed")
+            if auth_mode == "Đăng nhập":
+                with st.form("login_form"):
+                    l_user = st.text_input("Tên đăng nhập / Email", placeholder="vd: minh2003")
+                    l_pass = st.text_input("Mật khẩu", type="password")
+                    if st.form_submit_button("Đăng nhập & Đồng bộ", type="primary", use_container_width=True):
+                        u_clean = _normalize_username(l_user)
+                        record = db_get_user(u_clean)
+                        if record and _verify_password(l_pass, record.get("password_hash", "")):
+                            apply_user_payload_to_session(u_clean, record)
+                            st.toast("Đăng nhập thành công! Đã đồng bộ Key, Sổ từ vựng & Lịch sử.")
+                            st.rerun()
+                        else:
+                            st.error("Sai tên đăng nhập hoặc mật khẩu.")
+            else:
+                with st.form("register_form"):
+                    r_user = st.text_input("Tên đăng nhập (không dấu)", placeholder="vd: minh_spb")
+                    r_pass = st.text_input("Mật khẩu (tối thiểu 4 ký tự)", type="password")
+                    r_name = st.text_input("Họ và tên", placeholder="Nguyễn Văn A")
+                    r_year = st.selectbox("Năm học", options=STUDENT_YEAR_OPTIONS, index=3)
+                    r_uni = st.text_input("Trường theo học", placeholder="СПбГМТУ, ИТМО, СПбГУ...")
+                    if st.form_submit_button("Tạo tài khoản", type="primary", use_container_width=True):
+                        u_clean = _normalize_username(r_user)
+                        if len(u_clean) < 3 or len(r_pass) < 4 or not r_name.strip() or not r_uni.strip():
+                            st.warning("Nhập đủ tên đăng nhập (≥3 ký tự), mật khẩu (≥4 ký tự), họ tên và tên trường.")
+                        elif db_get_user(u_clean) is not None:
+                            st.error("Tên đăng nhập này đã tồn tại. Hãy chọn tên khác hoặc chuyển sang Đăng nhập.")
+                        else:
+                            new_payload = {
+                                "password_hash": _hash_password(r_pass),
+                                "profile": {
+                                    "full_name": r_name.strip(),
+                                    "student_year": r_year,
+                                    "university": r_uni.strip(),
+                                },
+                                "api_key": clean_api_key(st.session_state.get("saved_gemini_api_key", "")),
+                                "theme_mode": st.session_state.get("theme_mode", "light"),
+                                "vocab_notebook": st.session_state.get("saved_vocab_notebook", []),
+                                "translation_history": st.session_state.get("translation_history", []),
+                            }
+                            db_save_user(u_clean, new_payload)
+                            send_user_notification_email(r_name.strip(), r_year, r_uni.strip())
+                            apply_user_payload_to_session(u_clean, new_payload)
+                            st.toast("Tạo tài khoản thành công! Dữ liệu của bạn sẽ tự động lưu.")
+                            st.rerun()
+            st.caption(f"Lưu trữ: {sync_badge}")
 
         st.markdown("---")
-        st.markdown("#### Cài đặt API")
+
+        # 2. CÀI ĐẶT GEMINI API KEY (TỰ ĐỘNG LƯU VÀO TÀI KHOẢN)
+        st.markdown("#### Gemini API Key")
         saved_key_val = clean_api_key(st.session_state.get("saved_gemini_api_key", ""))
         gemini_api_key = st.text_input(
-            "Gemini API Key",
+            "API Key cá nhân",
             value=saved_key_val,
             type="password",
-            placeholder="Dán key để bật dịch AI, 6 cách & ví dụ",
+            placeholder="Dán Gemini API Key vào đây",
+            label_visibility="collapsed",
         )
         st.markdown(f"[Lấy Gemini API Key miễn phí →]({GEMINI_API_KEY_URL})")
 
         clean_key_input = clean_api_key(gemini_api_key)
-        if clean_key_input and clean_key_input != saved_key_val and len(clean_key_input) >= 20:
+        if clean_key_input != saved_key_val and (len(clean_key_input) >= 20 or clean_key_input == ""):
             st.session_state["saved_gemini_api_key"] = clean_key_input
-            st.session_state["pending_key_save"] = clean_key_input
             st.session_state.pop("pinned_gemini_model", None)
-            st.toast("Đã tự động lưu API Key cho các lần truy cập sau.")
+            if st.session_state["auth_username"]:
+                sync_current_account_to_db()
+                st.toast("Đã lưu API Key vào tài khoản của bạn.")
             st.rerun()
 
         if clean_key_input:
@@ -2556,37 +2452,9 @@ def main() -> None:
                 st.error(key_err)
             else:
                 top_m = st.session_state.get("pinned_gemini_model") or (models_avail[0] if models_avail else "gemini-flash")
-                st.caption(f"Đã lưu Key vĩnh viễn · Model: `{top_m}`")
-            if st.button("Xóa / Đổi API Key", use_container_width=True):
-                st.session_state["saved_gemini_api_key"] = ""
-                st.session_state["pending_key_delete"] = True
-                st.session_state.pop("pinned_gemini_model", None)
-                st.rerun()
+                st.caption(f"Sẵn sàng · Model: `{top_m}`")
         else:
-            st.caption("Chưa nhập Key — đang dùng chế độ dịch nhanh cơ bản.")
-
-        st.markdown("---")
-
-        has_prof = bool(st.session_state.get("confirmed_user_name") and st.session_state.get("confirmed_user_uni"))
-        with st.expander("Thông tin sinh viên" + (f" · {st.session_state['confirmed_user_name']}" if has_prof else ""), expanded=not has_prof):
-            cur_y = st.session_state.get("confirmed_user_year", "Sinh viên Năm 4")
-            y_idx = STUDENT_YEAR_OPTIONS.index(cur_y) if cur_y in STUDENT_YEAR_OPTIONS else 3
-            with st.form("sv_profile_form"):
-                u_name = st.text_input("Họ và tên", value=st.session_state.get("confirmed_user_name", ""), placeholder="Nguyễn Văn A")
-                u_year = st.selectbox("Năm học", options=STUDENT_YEAR_OPTIONS, index=y_idx)
-                u_uni = st.text_input("Trường theo học", value=st.session_state.get("confirmed_user_uni", ""), placeholder="СПбГМТУ, ИТМО, СПбГУ...")
-                if st.form_submit_button("Lưu thông tin", type="primary", use_container_width=True):
-                    if u_name.strip() and u_uni.strip():
-                        prof_obj = {"full_name": u_name.strip(), "student_year": u_year, "university": u_uni.strip()}
-                        st.session_state["confirmed_user_name"] = prof_obj["full_name"]
-                        st.session_state["confirmed_user_year"] = prof_obj["student_year"]
-                        st.session_state["confirmed_user_uni"] = prof_obj["university"]
-                        send_user_notification_email(prof_obj["full_name"], prof_obj["student_year"], prof_obj["university"])
-                        st.session_state["pending_profile_save"] = prof_obj
-                        st.toast("Đã lưu thông tin sinh viên cho các lần sau.")
-                        st.rerun()
-                    else:
-                        st.warning("Vui lòng nhập họ tên và tên trường.")
+            st.caption("Chưa có Key — đang dùng dịch cơ bản.")
 
         st.markdown("---")
         with st.expander("Dành cho tác giả"):
@@ -2599,20 +2467,16 @@ def main() -> None:
                     else:
                         st.error("Mật khẩu không đúng.")
             else:
-                st.caption("Đã mở khóa chế độ tác giả.")
-                if USER_LOGS_FILE.exists():
-                    try:
-                        logs = json.loads(USER_LOGS_FILE.read_text(encoding="utf-8"))
-                        st.caption(f"Danh sách đã đăng ký ({len(logs)}):")
-                        for item in logs[:15]:
-                            st.caption(f"• {item.get('full_name')} · {item.get('university')} ({item.get('time')})")
-                    except Exception:
-                        pass
+                st.caption(f"Trạng thái đồng bộ Cloud: {'Đang bật Supabase' if _is_cloud_sync_enabled() else 'Chưa cấu hình SUPABASE_URL/SUPABASE_KEY trong Secrets'}")
+                all_users = db_list_all_users()
+                st.caption(f"Tài khoản sinh viên đã đăng ký ({len(all_users)}):")
+                for u in all_users[:15]:
+                    st.caption(f"• **{u['full_name']}** (`@{u['username']}`) · {u['university']} · {u['vocab_count']} từ")
                 if st.button("Khóa lại", use_container_width=True):
                     st.session_state["is_author_admin"] = False
                     st.rerun()
 
-    # HEADER + NÚT BẬT/TẮT NỀN SÁNG/TỐI NHANH NGAY TRÊN ĐẦU TRANG
+    # HEADER + NÚT BẬT/TẮT NỀN SÁNG/TỐI
     hdr_c1, hdr_c2 = st.columns([5.2, 1.1])
     with hdr_c1:
         render_html(
@@ -2620,7 +2484,7 @@ def main() -> None:
             <div class="minimal-header" style="margin-bottom:8px;">
                 <div>
                     <h1 class="minimal-title">Anh Minh Translate</h1>
-                    <div class="minimal-sub">Dịch nhanh Nga – Việt, chia 6 cách, đồng nghĩa/trái nghĩa &amp; ôn tập từ vựng</div>
+                    <div class="minimal-sub">Dịch nhanh Nga – Việt, chia 6 cách, đồng nghĩa/trái nghĩa &amp; ôn tập từ vựng đồng bộ</div>
                 </div>
                 <div class="author-chip">
                     <img src="{avatar_uri}" class="author-chip-img" alt="Mai Văn Minh" />
@@ -2636,9 +2500,8 @@ def main() -> None:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         toggle_txt = "☀ Nền sáng" if is_dark else "☾ Nền tối"
         if st.button(toggle_txt, key="top_theme_toggle", use_container_width=True):
-            new_mode = "light" if is_dark else "dark"
-            st.session_state["theme_mode"] = new_mode
-            st.session_state["pending_theme_save"] = new_mode
+            st.session_state["theme_mode"] = "light" if is_dark else "dark"
+            sync_current_account_to_db()
             st.rerun()
 
     tab1, tab2, tab3 = st.tabs(["Dịch & Ngữ pháp", "Từ vựng & Ôn tập", "Kiến thức tiếng Nga"])
@@ -2655,9 +2518,10 @@ def main() -> None:
             st.session_state["selected_direction"] = direction
         with dir_c2:
             if st.button("⇄ Đổi chiều", use_container_width=True):
-                st.session_state["selected_direction"] = (
-                    DIRECTION_OPTIONS[1] if st.session_state["selected_direction"] == DIRECTION_OPTIONS[0] else DIRECTION_OPTIONS[0]
-                )
+                if st.session_state["selected_direction"] == DIRECTION_OPTIONS[1]:
+                    st.session_state["selected_direction"] = DIRECTION_OPTIONS[2]
+                else:
+                    st.session_state["selected_direction"] = DIRECTION_OPTIONS[1]
                 st.rerun()
 
         source_text = st.text_area(
@@ -2665,7 +2529,7 @@ def main() -> None:
             key="input_text_area",
             height=145,
             label_visibility="collapsed",
-            placeholder="Nhập 1 từ (Nga hoặc Việt) để chia 6 cách, chia động từ, tìm từ đồng/trái nghĩa, hoặc dán câu / đoạn văn để dịch & phân tích ngữ pháp...",
+            placeholder="Nhập từ, câu hoặc đoạn văn (tiếng Nga hay tiếng Việt đều tự nhận diện chuẩn) để dịch, chia 6 cách, chia động từ và xem ví dụ...",
         )
 
         b1, b2, b3, b4 = st.columns([1.8, 1.4, 1.0, 2.8])
@@ -2680,8 +2544,8 @@ def main() -> None:
         with b4:
             if source_text.strip():
                 k_map = {"word": "Từ / Cụm ngắn", "sentence": "Câu", "paragraph": "Đoạn văn"}
-                detected_k = k_map[classify_input_type(source_text)]
-                st.caption(f"{detected_k} · {len(source_text)} ký tự · {len(source_text.split())} từ")
+                eff_preview = resolve_effective_direction(source_text, direction)
+                st.caption(f"{k_map[classify_input_type(source_text)]} · {eff_preview} · {len(source_text.split())} từ")
 
         with st.expander("Tải tệp văn bản (.txt, .docx, .pdf)"):
             uploaded_doc = st.file_uploader("Chọn tệp tài liệu", type=["txt", "md", "docx", "pdf"], label_visibility="collapsed")
@@ -2696,7 +2560,7 @@ def main() -> None:
 
         if tts_clicked and source_text.strip():
             has_cyr = bool(re.search(r"[а-яА-ЯёЁ]", source_text))
-            lang_tts = "ru" if has_cyr else ("vi" if "Tiếng Việt →" in direction else "en")
+            lang_tts = "ru" if has_cyr else "vi"
             audio_b = generate_tts_audio(source_text, lang_tts)
             if audio_b:
                 st.audio(audio_b, format="audio/mp3")
@@ -2705,14 +2569,7 @@ def main() -> None:
             if not source_text.strip():
                 st.warning("Vui lòng nhập từ, câu hoặc đoạn văn cần dịch.")
             else:
-                # Tự động đảo chiều thông minh nếu đang để Nga → Việt mà người dùng gõ thuần tiếng Việt
-                effective_dir = direction
-                has_cyr = bool(re.search(r"[а-яА-ЯёЁ]", source_text))
-                has_vi_diacritics = bool(re.search(r"[ăâđêôơưàáảãạèéẻẽẹìíỉĩịòóỏõọùúủũụỳýỷỹỵ]", source_text.lower()))
-                if direction == DIRECTION_OPTIONS[0] and not has_cyr and has_vi_diacritics:
-                    effective_dir = DIRECTION_OPTIONS[1]
-                    st.info("Phát hiện bạn đang nhập tiếng Việt — hệ thống tự động dịch sang Tiếng Nga.")
-
+                effective_dir = resolve_effective_direction(source_text, direction)
                 result_data: Optional[Dict] = None
                 meta_badge = "Dịch nhanh"
                 if clean_key_input:
@@ -2736,7 +2593,7 @@ def main() -> None:
                 st.session_state["translation_history"].insert(
                     0,
                     {
-                        "time": datetime.now().strftime("%H:%M"),
+                        "time": datetime.now().strftime("%H:%M %d/%m"),
                         "preview": source_text.strip()[:120],
                         "full_source": source_text.strip(),
                         "result": result_data,
@@ -2744,6 +2601,7 @@ def main() -> None:
                     },
                 )
                 st.session_state["translation_history"] = st.session_state["translation_history"][:MAX_HISTORY_ITEMS]
+                sync_current_account_to_db()
 
         if st.session_state.get("last_translation_result"):
             render_translation_result(
@@ -2753,8 +2611,8 @@ def main() -> None:
             )
 
         if st.session_state["translation_history"]:
-            with st.expander(f"Lịch sử dịch gần đây ({len(st.session_state['translation_history'])})"):
-                for idx, h in enumerate(st.session_state["translation_history"][:10]):
+            with st.expander(f"Lịch sử dịch đã đồng bộ ({len(st.session_state['translation_history'])})"):
+                for idx, h in enumerate(st.session_state["translation_history"][:15]):
                     hc1, hc2 = st.columns([5, 1])
                     with hc1:
                         st.markdown(f"`{h['time']}` · {h['preview']}")
