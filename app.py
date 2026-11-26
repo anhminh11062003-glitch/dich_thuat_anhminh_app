@@ -67,6 +67,7 @@ MAX_AI_CACHE_SIZE = 150
 MAX_HISTORY_ITEMS = 50
 
 PREFERRED_GEMINI_MODELS = [
+    "gemini-3.5-flash-lite",
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
     "gemini-2.0-flash-lite",
