@@ -674,8 +674,17 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             border: 1px solid {border_light} !important;
             border-radius: 10px !important;
         }}
+        div[data-testid="stExpander"] details,
         div[data-testid="stExpander"] summary,
+        div[data-testid="stExpander"] details[open] > summary {{
+            background-color: {bg_surface} !important;
+            color: {text_main} !important;
+        }}
+        div[data-testid="stExpander"] summary:hover {{
+            background-color: {bg_subtle} !important;
+        }}
         div[data-testid="stExpander"] summary p,
+        div[data-testid="stExpander"] summary span,
         div[data-testid="stExpander"] summary svg {{
             color: {text_main} !important;
             fill: {text_main} !important;

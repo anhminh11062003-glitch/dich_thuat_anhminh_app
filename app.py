@@ -560,6 +560,9 @@ def main() -> None:
                 value=bool(st.session_state.get("tts_slow_mode", False)),
             )
 
+        if "pending_input_text" in st.session_state:
+            st.session_state["input_text_area"] = st.session_state.pop("pending_input_text")
+
         source_text = st.text_area(
             "Nội dung cần dịch",
             key="input_text_area",
@@ -575,7 +578,7 @@ def main() -> None:
             tts_clicked = st.button("Nghe văn bản", type="secondary", use_container_width=True)
         with b3:
             if st.button("Xóa", type="secondary", use_container_width=True):
-                st.session_state["input_text_area"] = ""
+                st.session_state["pending_input_text"] = ""
                 st.rerun()
         with b4:
             if source_text.strip():
@@ -654,7 +657,7 @@ def main() -> None:
                         st.markdown(f"`{h['time']}` · {h['preview']}")
                     with hc2:
                         if st.button("Mở lại", key=f"h_{idx}", use_container_width=True):
-                            st.session_state["input_text_area"] = h["full_source"]
+                            st.session_state["pending_input_text"] = h["full_source"]
                             st.session_state["last_translation_result"] = h["result"]
                             st.session_state["last_meta_badge"] = h["meta_badge"]
                             st.rerun()
