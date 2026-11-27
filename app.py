@@ -45,7 +45,6 @@ from services import (
     db_save_user,
     discover_working_gemini_models,
     export_users_to_csv,
-    extract_text_from_uploaded_doc,
     consume_demo_quota,
     fallback_fast_translate,
     generate_tts_audio,
@@ -291,6 +290,7 @@ def main() -> None:
                 with st.form("login_form"):
                     l_user = st.text_input("Tên đăng nhập / Email", placeholder="vd: minh2003")
                     l_pass = st.text_input("Mật khẩu", type="password")
+                    l_remember = st.checkbox("Ghi nhớ đăng nhập trên thiết bị này", value=True)
                     if st.form_submit_button("Đăng nhập & Đồng bộ", type="primary", use_container_width=True):
                         u_clean = _normalize_username(l_user)
                         record = db_get_user(u_clean)
@@ -300,7 +300,13 @@ def main() -> None:
                             record["token_version"] = int(record.get("token_version", 1))
                             db_save_user(u_clean, record)
                             apply_user_payload_to_session(u_clean, record)
-                            st.session_state["ask_remember_login"] = True
+                            if l_remember:
+                                st.session_state["is_login_remembered"] = True
+                                st.session_state["ask_remember_login"] = False
+                                st.session_state["pending_remember_save"] = u_clean
+                            else:
+                                st.session_state["is_login_remembered"] = False
+                                st.session_state["ask_remember_login"] = False
                             st.toast("Đăng nhập thành công! Đã đồng bộ Key, Sổ từ vựng & Lịch sử.")
                             st.rerun()
                         else:
@@ -312,6 +318,7 @@ def main() -> None:
                     r_name = st.text_input("Họ và tên", placeholder="Nguyễn Văn A")
                     r_year = st.selectbox("Năm học", options=STUDENT_YEAR_OPTIONS, index=3)
                     r_uni = st.text_input("Trường theo học", placeholder="СПбГМТУ, ИТМО, СПбГУ...")
+                    r_remember = st.checkbox("Ghi nhớ đăng nhập trên thiết bị này", value=True)
                     if st.form_submit_button("Tạo tài khoản", type="primary", use_container_width=True):
                         u_clean = _normalize_username(r_user)
                         if len(u_clean) < 3 or len(r_pass) < 4 or not r_name.strip() or not r_uni.strip():
@@ -339,7 +346,13 @@ def main() -> None:
                             db_save_user(u_clean, new_payload)
                             send_user_notification_email(r_name.strip(), r_year, r_uni.strip())
                             apply_user_payload_to_session(u_clean, new_payload)
-                            st.session_state["ask_remember_login"] = True
+                            if r_remember:
+                                st.session_state["is_login_remembered"] = True
+                                st.session_state["ask_remember_login"] = False
+                                st.session_state["pending_remember_save"] = u_clean
+                            else:
+                                st.session_state["is_login_remembered"] = False
+                                st.session_state["ask_remember_login"] = False
                             st.toast("Tạo tài khoản thành công! Dữ liệu của bạn sẽ tự động lưu.")
                             st.rerun()
             st.caption(f"Lưu trữ: {sync_badge}")
@@ -557,17 +570,6 @@ def main() -> None:
                 k_map = {"word": "Từ / Cụm ngắn", "sentence": "Câu", "paragraph": "Đoạn văn"}
                 eff_preview = resolve_effective_direction(source_text, direction)
                 st.caption(f"{k_map[classify_input_type(source_text)]} · {eff_preview} · {len(source_text.split())} từ")
-
-        with st.expander("Tải tệp văn bản (.txt, .docx, .pdf)"):
-            uploaded_doc = st.file_uploader("Chọn tệp tài liệu", type=["txt", "md", "docx", "pdf"], label_visibility="collapsed")
-            if uploaded_doc is not None:
-                if st.button("Đưa nội dung tệp vào ô dịch", use_container_width=True):
-                    txt, err = extract_text_from_uploaded_doc(uploaded_doc)
-                    if err:
-                        st.warning(err)
-                    elif txt:
-                        st.session_state["input_text_area"] = txt[:8000]
-                        st.rerun()
 
         if tts_clicked and source_text.strip():
             has_cyr = bool(re.search(r"[а-яА-ЯёЁ]", source_text))

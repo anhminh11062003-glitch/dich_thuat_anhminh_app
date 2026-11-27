@@ -166,13 +166,16 @@ def save_remembered_login(username: str, token_version: int = 1) -> None:
     components.html(
         f"""
         <script>
-        try {{
+        (function() {{
             const t = {safe_tok};
-            localStorage.setItem("am_remember_token", t);
-            const c = "am_rtok=" + encodeURIComponent(t) + "; path=/; max-age={max_age}; SameSite=Lax";
-            try {{ window.parent.document.cookie = c; }} catch (e) {{}}
-            document.cookie = c;
-        }} catch (e) {{}}
+            const isHttps = (location.protocol === "https:");
+            const sec = isHttps ? "; Secure" : "";
+            const c = "am_rtok=" + encodeURIComponent(t) + "; path=/; max-age={max_age}; SameSite=Lax" + sec;
+            for (const w of [window.top, window.parent, window]) {{
+                try {{ if (w && w.localStorage) w.localStorage.setItem("am_remember_token", t); }} catch (e) {{}}
+                try {{ if (w && w.document) w.document.cookie = c; }} catch (e) {{}}
+            }}
+        }})();
         </script>
         """,
         height=0,
@@ -183,12 +186,14 @@ def clear_remembered_login() -> None:
     components.html(
         """
         <script>
-        try {
-            localStorage.removeItem("am_remember_token");
+        (function() {
             const c = "am_rtok=; path=/; max-age=0; SameSite=Lax";
-            try { window.parent.document.cookie = c; } catch (e) {}
-            document.cookie = c;
-        } catch (e) {}
+            const cSec = "am_rtok=; path=/; max-age=0; SameSite=Lax; Secure";
+            for (const w of [window.top, window.parent, window]) {
+                try { if (w && w.localStorage) w.localStorage.removeItem("am_remember_token"); } catch (e) {}
+                try { if (w && w.document) { w.document.cookie = c; w.document.cookie = cSec; } } catch (e) {}
+            }
+        })();
         </script>
         """,
         height=0,
@@ -214,13 +219,16 @@ def save_remembered_admin() -> None:
     components.html(
         f"""
         <script>
-        try {{
+        (function() {{
             const a = {safe_atok};
-            localStorage.setItem("am_admin_token", a);
-            const c = "am_atok=" + encodeURIComponent(a) + "; path=/; max-age=31536000; SameSite=Lax";
-            try {{ window.parent.document.cookie = c; }} catch (e) {{}}
-            document.cookie = c;
-        }} catch (e) {{}}
+            const isHttps = (location.protocol === "https:");
+            const sec = isHttps ? "; Secure" : "";
+            const c = "am_atok=" + encodeURIComponent(a) + "; path=/; max-age=31536000; SameSite=Lax" + sec;
+            for (const w of [window.top, window.parent, window]) {{
+                try {{ if (w && w.localStorage) w.localStorage.setItem("am_admin_token", a); }} catch (e) {{}}
+                try {{ if (w && w.document) w.document.cookie = c; }} catch (e) {{}}
+            }}
+        }})();
         </script>
         """,
         height=0,
@@ -238,12 +246,14 @@ def clear_remembered_admin() -> None:
     components.html(
         """
         <script>
-        try {
-            localStorage.removeItem("am_admin_token");
+        (function() {
             const c = "am_atok=; path=/; max-age=0; SameSite=Lax";
-            try { window.parent.document.cookie = c; } catch (e) {}
-            document.cookie = c;
-        } catch (e) {}
+            const cSec = "am_atok=; path=/; max-age=0; SameSite=Lax; Secure";
+            for (const w of [window.top, window.parent, window]) {
+                try { if (w && w.localStorage) w.localStorage.removeItem("am_admin_token"); } catch (e) {}
+                try { if (w && w.document) { w.document.cookie = c; w.document.cookie = cSec; } } catch (e) {}
+            }
+        })();
         </script>
         """,
         height=0,
@@ -251,33 +261,61 @@ def clear_remembered_admin() -> None:
 
 
 def bootstrap_remembered_tokens_js(need_user: bool = True, need_admin: bool = True) -> None:
-    """Đọc lại token đăng nhập & token tác giả từ localStorage khi mở lại link gốc."""
+    """Đọc lại token đăng nhập & token tác giả từ localStorage/Cookie khi mở lại link gốc."""
     components.html(
         f"""
         <script>
-        try {{
-            const url = new URL(window.parent.location.href);
-            let changed = false;
-            if ({'true' if need_user else 'false'}) {{
-                const t = localStorage.getItem("am_remember_token");
-                if (t && t.includes(".") && url.searchParams.get("s") !== t) {{
-                    url.searchParams.set("s", t);
-                    changed = true;
+        (function() {{
+            function readStore(key) {{
+                for (const w of [window.top, window.parent, window]) {{
+                    try {{
+                        const v = w && w.localStorage && w.localStorage.getItem(key);
+                        if (v) return v;
+                    }} catch (e) {{}}
                 }}
+                return "";
             }}
-            if ({'true' if need_admin else 'false'}) {{
-                const a = localStorage.getItem("am_admin_token");
-                if (a && a.length >= 16 && url.searchParams.get("a") !== a) {{
-                    url.searchParams.set("a", a);
-                    changed = true;
+            function readCookie(name) {{
+                for (const w of [window.top, window.parent, window]) {{
+                    try {{
+                        const raw = (w && w.document && w.document.cookie) || "";
+                        for (const part of raw.split(";")) {{
+                            const kv = part.trim().split("=");
+                            if (kv[0] === name && kv[1]) return decodeURIComponent(kv.slice(1).join("="));
+                        }}
+                    }} catch (e) {{}}
                 }}
+                return "";
             }}
-            const lastTry = parseInt(sessionStorage.getItem("am_tok_sync_ts") || "0", 10);
-            if (changed && (Date.now() - lastTry > 3000)) {{
-                sessionStorage.setItem("am_tok_sync_ts", String(Date.now()));
-                window.parent.location.replace(url.toString());
+            let targetWin = null;
+            for (const w of [window.top, window.parent]) {{
+                try {{ if (w && w.location && w.location.href) {{ targetWin = w; break; }} }} catch (e) {{}}
             }}
-        }} catch (e) {{}}
+            if (!targetWin) return;
+            try {{
+                const url = new URL(targetWin.location.href);
+                let changed = false;
+                if ({'true' if need_user else 'false'}) {{
+                    const t = readStore("am_remember_token") || readCookie("am_rtok");
+                    if (t && t.includes(".") && url.searchParams.get("s") !== t) {{
+                        url.searchParams.set("s", t);
+                        changed = true;
+                    }}
+                }}
+                if ({'true' if need_admin else 'false'}) {{
+                    const a = readStore("am_admin_token") || readCookie("am_atok");
+                    if (a && a.length >= 16 && url.searchParams.get("a") !== a) {{
+                        url.searchParams.set("a", a);
+                        changed = true;
+                    }}
+                }}
+                const lastTry = parseInt(sessionStorage.getItem("am_tok_sync_ts") || "0", 10);
+                if (changed && (Date.now() - lastTry > 2000)) {{
+                    sessionStorage.setItem("am_tok_sync_ts", String(Date.now()));
+                    targetWin.location.replace(url.toString());
+                }}
+            }} catch (e) {{}}
+        }})();
         </script>
         """,
         height=0,
@@ -311,8 +349,8 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
         bg_subtle = "#1C1C21"
         bg_sidebar = "#111114"
         text_main = "#FAFAFA"
-        text_sub = "#A1A1AA"
-        text_muted = "#71717A"
+        text_sub = "#D4D4D8"
+        text_muted = "#A1A1AA"
         border_light = "#27272A"
         border_strong = "#3F3F46"
         btn_pri_bg = "#FAFAFA"
@@ -371,14 +409,54 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             padding-bottom: 3rem !important;
         }}
 
+        [data-testid="stAppViewContainer"] p,
+        [data-testid="stAppViewContainer"] label,
+        [data-testid="stAppViewContainer"] h1,
+        [data-testid="stAppViewContainer"] h2,
+        [data-testid="stAppViewContainer"] h3,
+        [data-testid="stAppViewContainer"] h4,
+        [data-testid="stMain"] p,
+        [data-testid="stMain"] label,
+        [data-testid="stMain"] span:not([data-testid="stIconMaterial"]),
+        [data-testid="stMain"] li,
+        [data-testid="stMain"] strong,
+        [data-testid="stMain"] b,
         .main p, .main label, .main h1, .main h2, .main h3, .main h4,
-        .main div[data-testid="stWidgetLabel"] p,
-        .main div[data-testid="stMarkdownContainer"] p,
-        .main div[data-testid="stMarkdownContainer"] li {{
+        div[data-testid="stWidgetLabel"] p,
+        div[data-testid="stMarkdownContainer"] p,
+        div[data-testid="stMarkdownContainer"] li,
+        div[data-testid="stRadio"] label,
+        div[data-testid="stRadio"] p,
+        div[data-testid="stCheckbox"] label,
+        div[data-testid="stCheckbox"] p {{
             color: {text_main} !important;
         }}
 
-        .main div[data-testid="stCaptionContainer"] p {{
+        [data-testid="stMain"] code,
+        section[data-testid="stSidebar"] code {{
+            background-color: {bg_subtle} !important;
+            color: {text_main} !important;
+            border: 1px solid {border_strong} !important;
+            padding: 1px 5px !important;
+            border-radius: 5px !important;
+        }}
+
+        div[data-testid="stAlert"] {{
+            background-color: {bg_surface} !important;
+            border: 1px solid {border_strong} !important;
+            color: {text_main} !important;
+        }}
+        div[data-testid="stAlert"] p,
+        div[data-testid="stAlert"] span,
+        div[data-testid="stAlert"] div {{
+            color: {text_main} !important;
+        }}
+
+        [data-testid="stMain"] a {{
+            color: {link_color} !important;
+        }}
+
+        div[data-testid="stCaptionContainer"] p {{
             color: {text_sub} !important;
             font-size: 0.85rem !important;
         }}
@@ -738,13 +816,31 @@ def render_vocab_and_practice_tab() -> None:
 
     if mode == "Thẻ ghi nhớ (Flashcards)":
         deck_options = ["Cần ôn hôm nay (Sổ cá nhân)", "Tất cả từ trong sổ"] + starter_names + ["30 từ lóng sinh viên Nga"]
+        default_fc_deck = "Cần ôn hôm nay (Sổ cá nhân)" if due_today_cnt > 0 else starter_names[0]
+        if st.session_state.get("selected_fc_deck") not in deck_options:
+            st.session_state["selected_fc_deck"] = default_fc_deck
+
+        st.caption("Chọn nhanh bộ từ vựng nhập môn A0–A1 (thực chiến):")
+        q_cols = st.columns(4)
+        for i_d, d_name in enumerate(starter_names):
+            short_lbl = d_name.split(". ", 1)[-1]
+            with q_cols[i_d]:
+                btn_type = "primary" if st.session_state["selected_fc_deck"] == d_name else "secondary"
+                if st.button(f"{short_lbl} ({len(STARTER_VOCAB_DECKS[d_name])})", key=f"quick_fc_{i_d}", type=btn_type, use_container_width=True):
+                    st.session_state["selected_fc_deck"] = d_name
+                    st.session_state["flashcard_index"] = 0
+                    st.session_state["flashcard_show_back"] = False
+                    st.rerun()
+
         fc1, fc2 = st.columns([2.2, 1])
         with fc1:
             deck_choice = st.selectbox(
                 "Bộ thẻ",
                 options=deck_options,
+                index=deck_options.index(st.session_state["selected_fc_deck"]),
                 label_visibility="collapsed",
             )
+            st.session_state["selected_fc_deck"] = deck_choice
             if st.session_state.get("last_flashcard_deck") != deck_choice:
                 st.session_state["last_flashcard_deck"] = deck_choice
                 st.session_state["flashcard_index"] = 0
@@ -869,9 +965,18 @@ def render_vocab_and_practice_tab() -> None:
 
     elif mode == "Trắc nghiệm (Quiz)":
         quiz_sources = ["Sổ cá nhân"] + starter_names + ["30 từ lóng sinh viên Nga"]
+        default_quiz_src = "Sổ cá nhân" if len(saved_list) >= 4 else starter_names[0]
+        if st.session_state.get("selected_quiz_src") not in quiz_sources:
+            st.session_state["selected_quiz_src"] = default_quiz_src
         qs1, qs2 = st.columns([2, 1.5])
         with qs1:
-            quiz_src = st.selectbox("Nguồn câu hỏi", options=quiz_sources, label_visibility="collapsed")
+            quiz_src = st.selectbox(
+                "Nguồn câu hỏi",
+                options=quiz_sources,
+                index=quiz_sources.index(st.session_state["selected_quiz_src"]),
+                label_visibility="collapsed",
+            )
+            st.session_state["selected_quiz_src"] = quiz_src
         with qs2:
             st.caption(f"Điểm: **{st.session_state['quiz_score']} / {st.session_state['quiz_total']}**")
 
