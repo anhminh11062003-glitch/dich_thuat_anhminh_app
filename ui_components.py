@@ -441,14 +441,27 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             border-radius: 5px !important;
         }}
 
-        div[data-testid="stAlert"] {{
+        div[data-testid="stAlert"],
+        div[data-testid="stAlertContainer"],
+        div[role="alert"],
+        div[data-baseweb="notification"] {{
+            background-color: {bg_subtle} !important;
+            border: 1px solid {border_strong} !important;
+            border-radius: 10px !important;
+            color: {text_main} !important;
+        }}
+        div[data-testid="stAlert"] *,
+        div[data-testid="stAlertContainer"] *,
+        div[role="alert"] *,
+        div[data-baseweb="notification"] * {{
+            color: {text_main} !important;
+        }}
+        div[data-testid="stToast"] {{
             background-color: {bg_surface} !important;
             border: 1px solid {border_strong} !important;
             color: {text_main} !important;
         }}
-        div[data-testid="stAlert"] p,
-        div[data-testid="stAlert"] span,
-        div[data-testid="stAlert"] div {{
+        div[data-testid="stToast"] * {{
             color: {text_main} !important;
         }}
 
@@ -501,6 +514,17 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             background-color: {bg_surface} !important;
             border-color: {border_strong} !important;
             border-radius: 10px !important;
+        }}
+        div[data-baseweb="input"] button,
+        div[data-testid="stTextInput"] button {{
+            background-color: {bg_surface} !important;
+            color: {text_main} !important;
+            border: none !important;
+        }}
+        div[data-baseweb="input"] button svg,
+        div[data-testid="stTextInput"] button svg {{
+            fill: {text_main} !important;
+            color: {text_main} !important;
         }}
 
         div[data-baseweb="select"] > div {{
@@ -656,6 +680,10 @@ def inject_theme_css(is_author_admin: bool = False, theme_mode: str = "light") -
             display: flex; align-items: center; gap: 12px;
             background: {bg_surface}; border: 1px solid {border_light}; border-radius: 12px;
             padding: 12px; margin-bottom: 14px;
+            color: {text_main} !important;
+        }}
+        .sidebar-author-box div {{
+            color: {text_main} !important;
         }}
         .sidebar-author-img {{
             width: 52px; height: 52px; border-radius: 50%; object-fit: cover;
