@@ -61,6 +61,7 @@ from ui_components import (
     clear_remembered_admin,
     clear_remembered_login,
     get_author_avatar_data_uri,
+    get_cookie_manager,
     inject_theme_css,
     render_html,
     render_russian_knowledge_hub,
@@ -71,7 +72,7 @@ from ui_components import (
 )
 
 
-def init_session_state() -> None:
+def init_session_state(cookie_manager: Any = None) -> None:
     defaults: Dict[str, Any] = {
         "auth_username": "",
         "auth_password_hash": "",
@@ -111,6 +112,15 @@ def init_session_state() -> None:
 
     cookie_rtok = _get_browser_cookie("am_rtok")
     cookie_atok = _get_browser_cookie("am_atok")
+    if cookie_manager is not None:
+        try:
+            all_cm = cookie_manager.get_all() or {}
+            if not cookie_rtok and all_cm.get("am_rtok"):
+                cookie_rtok = str(all_cm.get("am_rtok", "")).strip()
+            if not cookie_atok and all_cm.get("am_atok"):
+                cookie_atok = str(all_cm.get("am_atok", "")).strip()
+        except Exception:
+            pass
     cookie_user_verified = verify_session_token(cookie_rtok) if cookie_rtok else None
     has_valid_admin_cookie = verify_admin_token(cookie_atok) if cookie_atok else False
 
@@ -193,7 +203,8 @@ def init_session_state() -> None:
 
 
 def main() -> None:
-    init_session_state()
+    cookie_manager = get_cookie_manager()
+    init_session_state(cookie_manager=cookie_manager)
     is_dark = st.session_state["theme_mode"] == "dark"
     inject_theme_css(is_author_admin=st.session_state["is_author_admin"], theme_mode=st.session_state["theme_mode"])
     avatar_uri = get_author_avatar_data_uri()
@@ -221,16 +232,17 @@ def main() -> None:
             save_remembered_login(
                 st.session_state.pop("pending_remember_save"),
                 token_version=int(st.session_state.get("auth_token_version", 1)),
+                cookie_manager=cookie_manager,
             )
         if st.session_state.get("pending_remember_clear"):
             st.session_state.pop("pending_remember_clear")
-            clear_remembered_login()
+            clear_remembered_login(cookie_manager=cookie_manager)
         if st.session_state.get("pending_admin_save"):
             st.session_state.pop("pending_admin_save")
-            save_remembered_admin()
+            save_remembered_admin(cookie_manager=cookie_manager)
         if st.session_state.get("pending_admin_clear"):
             st.session_state.pop("pending_admin_clear")
-            clear_remembered_admin()
+            clear_remembered_admin(cookie_manager=cookie_manager)
 
         if st.session_state["auth_username"]:
             uname = st.session_state["auth_username"]

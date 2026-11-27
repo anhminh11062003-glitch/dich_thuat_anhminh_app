@@ -18,6 +18,11 @@ from typing import Any, Dict, List
 import streamlit as st
 import streamlit.components.v1 as components
 
+try:
+    import extra_streamlit_components as stx
+except Exception:
+    stx = None
+
 from data import (
     FIXED_AUTHOR_AVATAR_BASE64_OR_URL,
     KNOWLEDGE_HUB_CONTENT,
@@ -158,9 +163,29 @@ def render_copy_button(text_to_copy: str, label: str = "Sao chép", key_suffix: 
     )
 
 
-def save_remembered_login(username: str, token_version: int = 1) -> None:
-    """Lưu ghi nhớ đăng nhập cục bộ trên trình duyệt bằng Cookie (am_rtok) và localStorage."""
+def get_cookie_manager() -> Any:
+    """Khởi tạo CookieManager (extra-streamlit-components) để đọc/ghi Cookie thật trên Streamlit Cloud."""
+    if stx is None:
+        return None
+    try:
+        return stx.CookieManager(key="am_cookie_mgr")
+    except Exception:
+        return None
+
+
+def save_remembered_login(username: str, token_version: int = 1, cookie_manager: Any = None) -> None:
+    """Lưu ghi nhớ đăng nhập cục bộ trên trình duyệt bằng Cookie thật (am_rtok) + fallback localStorage."""
     tok = create_session_token(username, token_version=token_version)
+    if cookie_manager is not None:
+        try:
+            cookie_manager.set(
+                "am_rtok",
+                tok,
+                expires_at=datetime.now() + timedelta(days=SESSION_TOKEN_TTL_DAYS),
+                key="set_am_rtok",
+            )
+        except Exception:
+            pass
     safe_tok = json.dumps(tok)
     max_age = SESSION_TOKEN_TTL_DAYS * 86400
     components.html(
@@ -182,7 +207,12 @@ def save_remembered_login(username: str, token_version: int = 1) -> None:
     )
 
 
-def clear_remembered_login() -> None:
+def clear_remembered_login(cookie_manager: Any = None) -> None:
+    if cookie_manager is not None:
+        try:
+            cookie_manager.delete("am_rtok", key="del_am_rtok")
+        except Exception:
+            pass
     components.html(
         """
         <script>
@@ -200,11 +230,21 @@ def clear_remembered_login() -> None:
     )
 
 
-def save_remembered_admin() -> None:
-    """Lưu cố định quyền Tác giả trên thiết bị bằng Cookie (am_atok), localStorage và đồng bộ tài khoản."""
+def save_remembered_admin(cookie_manager: Any = None) -> None:
+    """Lưu cố định quyền Tác giả trên thiết bị bằng Cookie thật (am_atok), localStorage và đồng bộ tài khoản."""
     if not DEFAULT_AUTHOR_PASSWORD:
         return
     atok = create_admin_token()
+    if cookie_manager is not None:
+        try:
+            cookie_manager.set(
+                "am_atok",
+                atok,
+                expires_at=datetime.now() + timedelta(days=365),
+                key="set_am_atok",
+            )
+        except Exception:
+            pass
     try:
         if verify_admin_token(_get_browser_cookie("am_atok")):
             if "a" in st.query_params:
@@ -235,7 +275,12 @@ def save_remembered_admin() -> None:
     )
 
 
-def clear_remembered_admin() -> None:
+def clear_remembered_admin(cookie_manager: Any = None) -> None:
+    if cookie_manager is not None:
+        try:
+            cookie_manager.delete("am_atok", key="del_am_atok")
+        except Exception:
+            pass
     try:
         if "a" in st.query_params:
             del st.query_params["a"]
