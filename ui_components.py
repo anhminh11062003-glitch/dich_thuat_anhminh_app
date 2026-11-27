@@ -24,6 +24,7 @@ except Exception:
     stx = None
 
 from data import (
+    ALL_VOCAB_DECKS,
     FIXED_AUTHOR_AVATAR_BASE64_OR_URL,
     KNOWLEDGE_HUB_CONTENT,
     KNOWLEDGE_HUB_TOPICS,
@@ -31,6 +32,7 @@ from data import (
     RUSSIAN_SLANG_DICT,
     SESSION_TOKEN_TTL_DAYS,
     STARTER_VOCAB_DECKS,
+    VOCAB_DECK_CATEGORIES,
 )
 from services import (
     DEFAULT_AUTHOR_PASSWORD,
@@ -862,6 +864,7 @@ def render_vocab_and_practice_tab() -> None:
     mastered_cnt = sum(1 for v in saved_list if v.get("mastered"))
     due_today_cnt = sum(1 for v in saved_list if is_vocab_due_today(v))
     pct = int(round((mastered_cnt / len(saved_list)) * 100)) if saved_list else 0
+    total_library_words = sum(len(v) for v in ALL_VOCAB_DECKS.values()) + len(RUSSIAN_SLANG_DICT)
 
     if not st.session_state.get("auth_username"):
         st.info("Đăng nhập hoặc tạo tài khoản ở thanh bên trái để lưu vĩnh viễn và đồng bộ Sổ từ vựng + Lịch sử trên mọi thiết bị.")
@@ -869,16 +872,16 @@ def render_vocab_and_practice_tab() -> None:
     render_html(
         f"""
         <div class="stat-grid">
-            <div class="stat-box"><div class="stat-num">{len(saved_list)}</div><div class="stat-lbl">Tổng từ trong sổ</div></div>
-            <div class="stat-box"><div class="stat-num">{mastered_cnt}</div><div class="stat-lbl">Đã thuộc ({pct}%)</div></div>
-            <div class="stat-box"><div class="stat-num">{due_today_cnt}</div><div class="stat-lbl">Cần ôn hôm nay</div></div>
+            <div class="stat-box"><div class="stat-num">{len(saved_list)}</div><div class="stat-lbl">Từ trong sổ cá nhân</div></div>
+            <div class="stat-box"><div class="stat-num">{mastered_cnt} ({pct}%)</div><div class="stat-lbl">Đã thuộc kỹ</div></div>
+            <div class="stat-box"><div class="stat-num">{due_today_cnt}</div><div class="stat-lbl">Cần ôn hôm nay · Kho: {total_library_words} từ</div></div>
         </div>
         """
     )
 
     mode = st.radio(
         "Chế độ học từ vựng",
-        options=["Thẻ ghi nhớ (Flashcards)", "Trắc nghiệm (Quiz)", "Quản lý sổ & Tiếng lóng"],
+        options=["Thẻ ghi nhớ (Flashcards)", "Trắc nghiệm (Quiz)", "Quản lý sổ & Kho từ СПбГМТУ"],
         horizontal=True,
         label_visibility="collapsed",
     )
@@ -886,6 +889,7 @@ def render_vocab_and_practice_tab() -> None:
     slang_deck = [
         {
             "ru_accent": f"{x['accent']} ({x['full']})",
+            "pronunciation": "",
             "vi": x["vi"],
             "en": x["en"],
             "example": x.get("example", ""),
@@ -893,67 +897,86 @@ def render_vocab_and_practice_tab() -> None:
         }
         for x in RUSSIAN_SLANG_DICT
     ]
-    starter_names = list(STARTER_VOCAB_DECKS.keys())
+    all_deck_names = list(ALL_VOCAB_DECKS.keys())
     is_slow_tts = bool(st.session_state.get("tts_slow_mode", False))
 
     if mode == "Thẻ ghi nhớ (Flashcards)":
-        deck_options = ["Cần ôn hôm nay (Sổ cá nhân)", "Tất cả từ trong sổ"] + starter_names + ["30 từ lóng sinh viên Nga"]
-        default_fc_deck = "Cần ôn hôm nay (Sổ cá nhân)" if due_today_cnt > 0 else starter_names[0]
-        if st.session_state.get("selected_fc_deck") not in deck_options:
-            st.session_state["selected_fc_deck"] = default_fc_deck
+        cat_options = ["Sổ cá nhân", "Nhập môn A0–A1", "Toán · Lý · Hóa", "Chuyên ngành СПбГМТУ", "30 từ lóng SV"]
+        default_cat = "Sổ cá nhân" if due_today_cnt > 0 else "Chuyên ngành СПбГМТУ"
+        if st.session_state.get("fc_category") not in cat_options:
+            st.session_state["fc_category"] = default_cat
 
-        st.caption("Chọn nhanh bộ từ vựng nhập môn A0–A1 (thực chiến):")
-        q_cols = st.columns(4)
-        for i_d, d_name in enumerate(starter_names):
-            short_lbl = d_name.split(". ", 1)[-1]
-            with q_cols[i_d]:
-                btn_type = "primary" if st.session_state["selected_fc_deck"] == d_name else "secondary"
-                if st.button(f"{short_lbl} ({len(STARTER_VOCAB_DECKS[d_name])})", key=f"quick_fc_{i_d}", type=btn_type, use_container_width=True):
-                    st.session_state["selected_fc_deck"] = d_name
-                    st.session_state["flashcard_index"] = 0
-                    st.session_state["flashcard_show_back"] = False
-                    st.rerun()
+        selected_cat = st.radio(
+            "Nhóm chủ đề",
+            options=cat_options,
+            index=cat_options.index(st.session_state["fc_category"]),
+            horizontal=True,
+            label_visibility="collapsed",
+            key="fc_cat_radio",
+        )
+        if selected_cat != st.session_state["fc_category"]:
+            st.session_state["fc_category"] = selected_cat
+            st.session_state["flashcard_index"] = 0
+            st.session_state["flashcard_show_back"] = False
 
-        fc1, fc2 = st.columns([2.2, 1])
+        if selected_cat == "Sổ cá nhân":
+            sub_decks = ["Cần ôn hôm nay (Sổ cá nhân)", "Tất cả từ trong sổ"]
+        elif selected_cat == "30 từ lóng SV":
+            sub_decks = ["30 từ lóng sinh viên Nga"]
+        else:
+            sub_decks = VOCAB_DECK_CATEGORIES[selected_cat]
+
+        if st.session_state.get("selected_fc_deck") not in sub_decks:
+            st.session_state["selected_fc_deck"] = sub_decks[0]
+
+        if len(sub_decks) > 1:
+            q_cols = st.columns(len(sub_decks))
+            for i_d, d_name in enumerate(sub_decks):
+                short_lbl = d_name.split(". ", 1)[-1]
+                count_d = (
+                    due_today_cnt if d_name.startswith("Cần ôn")
+                    else len(saved_list) if d_name.startswith("Tất cả")
+                    else len(ALL_VOCAB_DECKS[d_name])
+                )
+                with q_cols[i_d]:
+                    btn_type = "primary" if st.session_state["selected_fc_deck"] == d_name else "secondary"
+                    if st.button(f"{short_lbl} ({count_d})", key=f"quick_fc_{selected_cat}_{i_d}", type=btn_type, use_container_width=True):
+                        st.session_state["selected_fc_deck"] = d_name
+                        st.session_state["flashcard_index"] = 0
+                        st.session_state["flashcard_show_back"] = False
+                        st.rerun()
+
+        deck_choice = st.session_state["selected_fc_deck"]
+        fc1, fc2 = st.columns([2.8, 1])
         with fc1:
-            deck_choice = st.selectbox(
-                "Bộ thẻ",
-                options=deck_options,
-                index=deck_options.index(st.session_state["selected_fc_deck"]),
-                label_visibility="collapsed",
-            )
-            st.session_state["selected_fc_deck"] = deck_choice
-            if st.session_state.get("last_flashcard_deck") != deck_choice:
-                st.session_state["last_flashcard_deck"] = deck_choice
-                st.session_state["flashcard_index"] = 0
-                st.session_state["flashcard_show_back"] = False
+            st.caption(f"Đang học bộ: **{deck_choice}**")
         with fc2:
             if st.button("Xáo trộn thẻ", use_container_width=True):
                 if deck_choice in ("Cần ôn hôm nay (Sổ cá nhân)", "Tất cả từ trong sổ") and saved_list:
                     random.shuffle(saved_list)
-                elif deck_choice in STARTER_VOCAB_DECKS:
-                    random.shuffle(STARTER_VOCAB_DECKS[deck_choice])
+                elif deck_choice in ALL_VOCAB_DECKS:
+                    random.shuffle(ALL_VOCAB_DECKS[deck_choice])
                 st.session_state["flashcard_index"] = 0
                 st.session_state["flashcard_show_back"] = False
                 st.rerun()
 
         is_personal_deck = deck_choice in ("Cần ôn hôm nay (Sổ cá nhân)", "Tất cả từ trong sổ")
-        is_starter_deck = deck_choice in STARTER_VOCAB_DECKS
+        is_library_deck = deck_choice in ALL_VOCAB_DECKS
 
         if deck_choice == "Cần ôn hôm nay (Sổ cá nhân)":
             active_deck = [v for v in saved_list if is_vocab_due_today(v)]
         elif deck_choice == "Tất cả từ trong sổ":
             active_deck = saved_list
-        elif is_starter_deck:
-            active_deck = STARTER_VOCAB_DECKS[deck_choice]
+        elif is_library_deck:
+            active_deck = ALL_VOCAB_DECKS[deck_choice]
         else:
             active_deck = slang_deck
 
         if not active_deck:
             if deck_choice == "Cần ôn hôm nay (Sổ cá nhân)" and saved_list:
-                st.success("Bạn đã ôn hết toàn bộ từ đến hạn hôm nay! Hãy chọn 4 bộ nhập môn A0–A1 hoặc «Tất cả từ trong sổ» để học thêm.")
+                st.success("Bạn đã ôn hết toàn bộ từ đến hạn hôm nay! Hãy chuyển sang nhóm «Toán · Lý · Hóa» hoặc «Chuyên ngành СПбГМТУ» để học thêm.")
             else:
-                st.info("Không có thẻ nào trong bộ này. Hãy lưu từ ở Tab 1 hoặc chọn một trong 4 bộ từ vựng nhập môn A0–A1.")
+                st.info("Chưa có thẻ trong sổ cá nhân. Hãy chọn các nhóm «Nhập môn A0–A1», «Toán · Lý · Hóa» hoặc «Chuyên ngành СПбГМТУ» ở trên để học ngay.")
             return
 
         idx = st.session_state["flashcard_index"] % len(active_deck)
@@ -964,17 +987,17 @@ def render_vocab_and_practice_tab() -> None:
 
         pron_txt = str(card.get("pronunciation") or card.get("pronunciation_hint") or "").strip()
         pron_html = (
-            f'<div style="font-size:0.9rem;opacity:0.78;font-weight:400;margin-top:4px;">Phiên âm: {esc(pron_txt)}</div>'
+            f'<div style="font-size:0.92rem;opacity:0.82;font-weight:400;margin-top:4px;">Phiên âm: {esc(pron_txt)}</div>'
             if pron_txt
             else ""
         )
         en_html = (
-            f'<div style="font-size:0.86rem;opacity:0.72;font-weight:400;margin-top:3px;">{esc(card.get("en", ""))}</div>'
+            f'<div style="font-size:0.86rem;opacity:0.75;font-weight:400;margin-top:3px;">{esc(card.get("en", ""))}</div>'
             if card.get("en")
             else ""
         )
         ex_html = (
-            f'<div style="font-size:0.88rem;opacity:0.84;font-weight:400;margin-top:8px;">VD: <i>{esc(card.get("example", ""))}</i></div>'
+            f'<div style="font-size:0.89rem;opacity:0.88;font-weight:400;margin-top:8px;">VD: <i>{esc(card.get("example", ""))}</i></div>'
             if card.get("example")
             else ""
         )
@@ -982,12 +1005,12 @@ def render_vocab_and_practice_tab() -> None:
         back_html = (
             f'<div class="flashcard-back">{esc(card["vi"])}{pron_html}{en_html}{ex_html}</div>'
             if st.session_state["flashcard_show_back"]
-            else '<div style="margin-top:12px;font-size:0.86rem;opacity:0.7;">Bấm «Lật thẻ» để xem nghĩa</div>'
+            else '<div style="margin-top:12px;font-size:0.86rem;opacity:0.75;">Bấm «Lật thẻ» để xem nghĩa, phiên âm &amp; ví dụ</div>'
         )
         render_html(
             f"""
             <div class="flashcard-minimal">
-                <div style="font-size:0.8rem;opacity:0.7;margin-bottom:8px;">Thẻ {idx + 1} / {len(active_deck)}{status_tag}</div>
+                <div style="font-size:0.8rem;opacity:0.75;margin-bottom:8px;">Thẻ {idx + 1} / {len(active_deck)}{status_tag}</div>
                 <div class="flashcard-word">{esc(card["ru_accent"])}</div>
                 {back_html}
             </div>
@@ -1041,16 +1064,42 @@ def render_vocab_and_practice_tab() -> None:
                     cnt = add_vocab_items_to_notebook([card])
                     st.toast("Đã lưu thẻ vào sổ cá nhân." if cnt else "Từ này đã có trong sổ.")
             with sc2:
-                if is_starter_deck and st.button("Lưu cả bộ vào sổ", key="btn_save_all_starter", use_container_width=True):
+                if is_library_deck and st.button(f"Lưu cả bộ ({len(active_deck)} từ) vào sổ", key="btn_save_all_starter", use_container_width=True):
                     cnt = add_vocab_items_to_notebook(active_deck)
                     st.toast(f"Đã lưu thêm {cnt} từ mới vào sổ cá nhân." if cnt else "Toàn bộ thẻ trong bộ này đã có trong sổ.")
 
+        with st.expander(f"Xem bảng danh sách đầy đủ bộ này ({len(active_deck)} từ)"):
+            rows_preview = "".join(
+                f"<tr><td><b>{esc(it.get('ru_accent',''))}</b>"
+                + (f"<br/><span style='font-size:0.78rem;opacity:0.78;'>{esc(it.get('pronunciation') or it.get('pronunciation_hint') or '')}</span>" if (it.get("pronunciation") or it.get("pronunciation_hint")) else "")
+                + f"</td><td>{esc(it.get('vi',''))}</td><td><i>{esc(it.get('example',''))}</i></td></tr>"
+                for it in active_deck
+            )
+            render_html(
+                f"""
+                <div class="clean-card" style="padding:0;max-height:360px;overflow-y:auto;margin:4px 0;">
+                    <table class="clean-table" style="margin-top:0;">
+                        <thead><tr><th>Tiếng Nga &amp; Phiên âm</th><th>Nghĩa tiếng Việt</th><th>Ví dụ áp dụng</th></tr></thead>
+                        <tbody>{rows_preview}</tbody>
+                    </table>
+                </div>
+                """
+            )
+            st.download_button(
+                f"Tải bộ này ra CSV ({len(active_deck)} từ)",
+                data=export_vocab_to_anki_csv(active_deck),
+                file_name="bo_tu_vung_spbgmtu.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
     elif mode == "Trắc nghiệm (Quiz)":
-        quiz_sources = ["Sổ cá nhân"] + starter_names + ["30 từ lóng sinh viên Nga"]
-        default_quiz_src = "Sổ cá nhân" if len(saved_list) >= 4 else starter_names[0]
+        quiz_sources = ["Sổ cá nhân"] + all_deck_names + ["30 từ lóng sinh viên Nga"]
+        default_quiz_src = "Sổ cá nhân" if len(saved_list) >= 4 else "9. Kết cấu & Lý thuyết tàu (Кораблестроение)"
         if st.session_state.get("selected_quiz_src") not in quiz_sources:
             st.session_state["selected_quiz_src"] = default_quiz_src
-        qs1, qs2 = st.columns([2, 1.5])
+
+        qs1, qs2, qs3 = st.columns([2.4, 1.1, 0.8])
         with qs1:
             quiz_src = st.selectbox(
                 "Nguồn câu hỏi",
@@ -1060,7 +1109,16 @@ def render_vocab_and_practice_tab() -> None:
             )
             st.session_state["selected_quiz_src"] = quiz_src
         with qs2:
-            st.caption(f"Điểm: **{st.session_state['quiz_score']} / {st.session_state['quiz_total']}**")
+            q_tot = st.session_state["quiz_total"]
+            q_sc = st.session_state["quiz_score"]
+            acc = int(round((q_sc / q_tot) * 100)) if q_tot else 0
+            st.caption(f"Điểm: **{q_sc}/{q_tot}** ({acc}%)")
+        with qs3:
+            if st.button("Đặt lại", key="btn_reset_quiz", use_container_width=True):
+                st.session_state["quiz_score"] = 0
+                st.session_state["quiz_total"] = 0
+                st.session_state["current_quiz"] = None
+                st.rerun()
 
         quiz_dir_label = st.radio(
             "Chiều kiểm tra",
@@ -1078,13 +1136,13 @@ def render_vocab_and_practice_tab() -> None:
         if quiz_src == "Sổ cá nhân":
             due_pool = [v for v in saved_list if is_vocab_due_today(v)]
             pool = due_pool if len(due_pool) >= 4 else saved_list
-        elif quiz_src in STARTER_VOCAB_DECKS:
-            pool = STARTER_VOCAB_DECKS[quiz_src]
+        elif quiz_src in ALL_VOCAB_DECKS:
+            pool = ALL_VOCAB_DECKS[quiz_src]
         else:
             pool = slang_deck
 
         if len(pool) < 4:
-            st.info(f"Nguồn «{quiz_src}» hiện có {len(pool)} từ (cần ít nhất 4 từ để tạo trắc nghiệm). Hãy lưu thêm từ hoặc chọn một trong 4 bộ nhập môn A0–A1.")
+            st.info(f"Nguồn «{quiz_src}» hiện có {len(pool)} từ (cần ít nhất 4 từ để tạo trắc nghiệm). Hãy chọn một bộ trong 11 chủ đề Toán · Lý · Hóa · СПбГМТУ ở trên.")
             return
 
         if (
@@ -1102,8 +1160,8 @@ def render_vocab_and_practice_tab() -> None:
                 render_html(
                     f"""
                     <div class="clean-card" style="text-align:center;padding:22px;">
-                        <div style="font-size:0.86rem;opacity:0.78;margin-bottom:4px;">{esc(q['sub_hint'])}</div>
-                        <div style="font-size:1.1rem;font-weight:600;opacity:0.85;">(Chữ tiếng Nga sẽ hiện sau khi bạn chọn đáp án)</div>
+                        <div style="font-size:0.86rem;opacity:0.8;margin-bottom:4px;">{esc(q['sub_hint'])}</div>
+                        <div style="font-size:1.1rem;font-weight:600;opacity:0.88;">(Chữ tiếng Nga sẽ hiện sau khi bạn chọn đáp án)</div>
                     </div>
                     """
                 )
@@ -1115,7 +1173,7 @@ def render_vocab_and_practice_tab() -> None:
                 render_html(
                     f"""
                     <div class="clean-card" style="text-align:center;padding:24px;">
-                        <div style="font-size:0.82rem;opacity:0.7;margin-bottom:6px;">{esc(q['sub_hint'])}</div>
+                        <div style="font-size:0.82rem;opacity:0.75;margin-bottom:6px;">{esc(q['sub_hint'])}</div>
                         <div style="font-size:1.55rem;font-weight:700;">{esc(q['prompt'])}</div>
                     </div>
                     """
@@ -1145,7 +1203,7 @@ def render_vocab_and_practice_tab() -> None:
                     st.rerun()
 
     else:
-        col_left, col_right = st.columns([1.1, 1.0])
+        col_left, col_right = st.columns([1.05, 1.15])
         with col_left:
             st.markdown("#### Sổ từ vựng cá nhân")
             with st.expander("Thêm từ thủ công hoặc nhập từ file CSV"):
@@ -1174,11 +1232,22 @@ def render_vocab_and_practice_tab() -> None:
                         st.error(f"Lỗi đọc CSV: {exc}")
 
             if saved_list:
-                q_my = st.text_input("Tìm trong sổ của bạn", placeholder="Gõ tiếng Nga hoặc tiếng Việt...", label_visibility="collapsed")
-                filtered_my = [
-                    (i, v) for i, v in enumerate(saved_list)
-                    if not q_my.strip() or q_my.lower() in v["ru_accent"].lower() or q_my.lower() in v["vi"].lower()
-                ]
+                f_c1, f_c2 = st.columns([1.6, 1.1])
+                with f_c1:
+                    q_my = st.text_input("Tìm trong sổ của bạn", placeholder="Gõ tiếng Nga hoặc tiếng Việt...", label_visibility="collapsed")
+                with f_c2:
+                    my_filter = st.selectbox("Lọc", ["Tất cả", "Cần ôn hôm nay", "Đã thuộc"], label_visibility="collapsed")
+
+                filtered_my = []
+                for i, v in enumerate(saved_list):
+                    if my_filter == "Cần ôn hôm nay" and not is_vocab_due_today(v):
+                        continue
+                    if my_filter == "Đã thuộc" and not v.get("mastered"):
+                        continue
+                    if q_my.strip() and q_my.lower() not in v["ru_accent"].lower() and q_my.lower() not in v["vi"].lower():
+                        continue
+                    filtered_my.append((i, v))
+
                 st.download_button(
                     f"Xuất {len(saved_list)} từ ra CSV (Anki / Excel)",
                     data=export_vocab_to_anki_csv(saved_list),
@@ -1196,7 +1265,7 @@ def render_vocab_and_practice_tab() -> None:
                 page_items = filtered_my[start_i : start_i + per_page]
 
                 for orig_i, v in page_items:
-                    rc1, rc2, rc3 = st.columns([3.6, 1.2, 0.7])
+                    rc1, rc2, rc3 = st.columns([3.5, 1.25, 0.65])
                     with rc1:
                         st.markdown(f"**{v['ru_accent']}** — {v['vi']}")
                     with rc2:
@@ -1230,33 +1299,47 @@ def render_vocab_and_practice_tab() -> None:
                             st.session_state["vocab_page"] = cur_page + 1
                             st.rerun()
             else:
-                st.caption("Sổ từ vựng đang trống. Hãy lưu từ sau khi tra ở Tab 1 hoặc thêm thủ công.")
+                st.caption("Sổ từ vựng đang trống. Hãy lưu từ sau khi tra ở Tab 1, lưu từ kho bên phải hoặc thêm thủ công.")
 
         with col_right:
-            st.markdown("#### Tra nhanh 30 từ lóng sinh viên Nga")
-            q_slang = st.text_input("Tìm từ lóng", placeholder="препод, курсач, хвост, инфа...", label_visibility="collapsed")
-            filtered = [
-                x for x in RUSSIAN_SLANG_DICT
-                if not q_slang.strip()
-                or q_slang.lower() in x["word"].lower()
-                or q_slang.lower() in x["vi"].lower()
-                or q_slang.lower() in x["full"].lower()
+            st.markdown(f"#### Tra nhanh kho từ vựng ({total_library_words} từ)")
+            lib_filter_opts = ["Tất cả 11 bộ + Tiếng lóng"] + all_deck_names + ["30 từ lóng sinh viên Nga"]
+            lib_src = st.selectbox("Chọn chủ đề tra nhanh", options=lib_filter_opts, label_visibility="collapsed", key="lib_browse_src")
+            q_lib = st.text_input("Tìm thuật ngữ Nga / Việt / Anh", placeholder="VD: остойчивость, tích phân, thân tàu, препод...", label_visibility="collapsed", key="lib_search_q")
+
+            if lib_src == "Tất cả 11 bộ + Tiếng lóng":
+                browse_items = [it for d in ALL_VOCAB_DECKS.values() for it in d] + slang_deck
+            elif lib_src in ALL_VOCAB_DECKS:
+                browse_items = ALL_VOCAB_DECKS[lib_src]
+            else:
+                browse_items = slang_deck
+
+            ql = q_lib.strip().lower()
+            matched_lib = [
+                x for x in browse_items
+                if not ql
+                or ql in str(x.get("ru_accent", "")).lower()
+                or ql in str(x.get("vi", "")).lower()
+                or ql in str(x.get("en", "")).lower()
+                or ql in str(x.get("pronunciation", "")).lower()
             ]
+            st.caption(f"Hiển thị {min(len(matched_lib), 60)} / {len(matched_lib)} thuật ngữ khớp")
             rows = "".join(
-                f"<tr><td><b>{esc(x['accent'])}</b><br/><span style='font-size:0.8rem;opacity:0.7;'>{esc(x['full'])}</span></td><td>{esc(x['vi'])}</td></tr>"
-                for x in filtered
+                f"<tr><td><b>{esc(x.get('ru_accent',''))}</b>"
+                + (f"<br/><span style='font-size:0.78rem;opacity:0.78;'>{esc(x.get('pronunciation',''))}</span>" if x.get("pronunciation") else "")
+                + f"</td><td>{esc(x.get('vi',''))}</td></tr>"
+                for x in matched_lib[:60]
             )
             render_html(
                 f"""
-                <div class="clean-card" style="padding:0;max-height:420px;overflow-y:auto;">
+                <div class="clean-card" style="padding:0;max-height:440px;overflow-y:auto;">
                     <table class="clean-table" style="margin-top:0;">
-                        <thead><tr><th>Tiếng Nga</th><th>Nghĩa tiếng Việt</th></tr></thead>
+                        <thead><tr><th>Tiếng Nga &amp; Phiên âm</th><th>Nghĩa tiếng Việt</th></tr></thead>
                         <tbody>{rows}</tbody>
                     </table>
                 </div>
                 """
             )
-
 
 def render_translation_result(res: Dict[str, Any], meta_badge: str, is_dark: bool = False) -> None:
     kind_labels = {"word": "Tra từ", "sentence": "Phân tích câu", "paragraph": "Dịch đoạn văn"}
