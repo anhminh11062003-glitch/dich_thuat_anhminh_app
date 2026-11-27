@@ -422,6 +422,55 @@ DECK_OCEAN_TECH_NAV: List[Dict[str, str]] = [
     {"ru_accent": "Экипа́ж", "pronunciation": "ê-ki-pásh", "vi": "Thủy thủ đoàn", "en": "Ship crew", "example": "Чи́сленность экипа́жа — два́дцать челове́к."},
 ]
 
+DECK_ASPECT_VERBS_NSV_SV: List[Dict[str, str]] = [
+    # Nhóm 1: Động từ + Cách 4 (Кого? Что?)
+    {"ru_accent": "ви́деть — уви́деть", "pronunciation": "ví-đêt — u-ví-đêt", "vi": "nhìn thấy (НСВ — СВ · + C4)", "en": "to see", "example": "Я уви́дел дру́га на ста́нции метро́."},
+    {"ru_accent": "повторя́ть — повтори́ть", "pronunciation": "pơp-ta-riát — pơp-ta-rít", "vi": "nhắc lại / ôn lại (НСВ — СВ · + C4)", "en": "to repeat / review", "example": "Повтори́те, пожа́луйста, э́то пра́вило."},
+    {"ru_accent": "изуча́ть — изучи́ть", "pronunciation": "i-zu-chát — i-zu-chít", "vi": "nghiên cứu / học chuyên sâu (НСВ — СВ · + C4)", "en": "to study thoroughly", "example": "Мы изуча́ем тео́рию кора́бля на тре́тьем ку́рсе."},
+    {"ru_accent": "гото́вить — пригото́вить", "pronunciation": "ga-tô-vit — pri-ga-tô-vit", "vi": "chuẩn bị / nấu ăn (НСВ — СВ · + C4)", "en": "to prepare / cook", "example": "Я пригото́вил докла́д к семина́ру."},
+    {"ru_accent": "люби́ть — полюби́ть", "pronunciation": "liu-bít — pa-liu-bít", "vi": "yêu thích / đem lòng yêu (НСВ — СВ · + C4)", "en": "to love / fall in love", "example": "Он сразу полюби́л Санкт-Петербу́рг."},
+    {"ru_accent": "вспомина́ть — вспо́мнить", "pronunciation": "pơx-pa-mi-nát — pxpôm-nhit", "vi": "nhớ lại / hồi tưởng (НСВ — СВ · + C4)", "en": "to recall / remember", "example": "Я наконе́ц вспо́мнил э́ту фо́рмулу!"},
+    {"ru_accent": "встреча́ть — встре́тить", "pronunciation": "pxtrê-chát — pxtrê-chit", "vi": "đón / gặp gỡ ai (НСВ — СВ · + C4)", "en": "to meet / pick up", "example": "Мы встре́тили но́вых студе́нтов в аэропорту́."},
+    {"ru_accent": "поздравля́ть — поздра́вить", "pronunciation": "paz-đra-vliát — paz-đrá-vit", "vi": "chúc mừng (НСВ — СВ · + C4 + с C5)", "en": "to congratulate", "example": "Поздравля́ю вас с днём рожде́ния!"},
+    {"ru_accent": "открыва́ть — откры́ть", "pronunciation": "at-krư-vát — at-krưt", "vi": "mở ra (НСВ — СВ · + C4)", "en": "to open", "example": "Откро́йте уче́бник на пя́той страни́це."},
+    {"ru_accent": "закрыва́ть — закры́ть", "pronunciation": "za-krư-vát — za-krưt", "vi": "đóng lại / trả xong nợ môn (НСВ — СВ · + C4)", "en": "to close", "example": "Ну́жно закры́ть все хвосты́ до се́ссии."},
+    {"ru_accent": "получа́ть — получи́ть", "pronunciation": "pa-lu-chát — pa-lu-chít", "vi": "nhận được (НСВ — СВ · + C4)", "en": "to receive / get", "example": "Я получи́л автома́т по фи́зике."},
+    {"ru_accent": "приглаша́ть — пригласи́ть", "pronunciation": "pri-gla-sát — pri-gla-xít", "vi": "mời (НСВ — СВ · + C4)", "en": "to invite", "example": "Друг пригласи́л меня́ на ве́чер университе́та."},
+    {"ru_accent": "исправля́ть — испра́вить", "pronunciation": "ix-pra-vliát — ix-prá-vit", "vi": "sửa lỗi (НСВ — СВ · + C4)", "en": "to correct / fix", "example": "Ну́жно испра́вить оши́бки в чертеже́."},
+    {"ru_accent": "проси́ть — попроси́ть", "pronunciation": "pra-xít — pa-pra-xít", "vi": "nhờ vả / xin (НСВ — СВ · + C4)", "en": "to ask for / request", "example": "Я попроси́л преподава́теля объясни́ть ещё раз."},
+    {"ru_accent": "реша́ть — реши́ть", "pronunciation": "ri-sát — ri-sít", "vi": "giải bài / quyết định (НСВ — СВ · + C4)", "en": "to solve / decide", "example": "Мы реши́ли все зада́чи по мата́ну."},
+    {"ru_accent": "смотре́ть — посмотре́ть", "pronunciation": "xma-trết — pa-xma-trết", "vi": "xem / nhìn (НСВ — СВ · + C4)", "en": "to watch / look", "example": "Посмотри́ расписа́ние на са́йте СПбГМТУ."},
+    {"ru_accent": "петь — спеть", "pronunciation": "pêt — xpêt", "vi": "hát (НСВ — СВ · + C4)", "en": "to sing", "example": "Дава́й споём ру́сскую пе́сню!"},
+    {"ru_accent": "благодари́ть — поблагодари́ть", "pronunciation": "bla-ga-đa-rít — pa-bla-ga-đa-rít", "vi": "cảm ơn ai vì điều gì (НСВ — СВ · + C4 + за C4)", "en": "to thank", "example": "Мы поблагодари́ли учи́теля за по́мощь."},
+    # Nhóm 2: Động từ + Cách 3 (Кому?) (+ Cách 4 / Cách 6 / Inf)
+    {"ru_accent": "звони́ть — позвони́ть", "pronunciation": "zva-nhít — pa-zva-nhít", "vi": "gọi điện cho ai (НСВ — СВ · + C3)", "en": "to call", "example": "Позвони́ мне ве́чером по́сле па́ры."},
+    {"ru_accent": "сообща́ть — сообщи́ть", "pronunciation": "xa-ap-sát — xa-ap-sít", "vi": "thông báo / báo cáo (НСВ — СВ · + C3 + о C6)", "en": "to inform / report", "example": "Ста́роста сообщи́ла гру́ппе о перено́се экза́мена."},
+    {"ru_accent": "расска́зывать — рассказа́ть", "pronunciation": "rax-ká-zư-vơt — rax-ka-zát", "vi": "kể lại (НСВ — СВ · + C3 + о C6)", "en": "to tell / narrate", "example": "Она́ рассказа́ла мне о своём прое́кте."},
+    {"ru_accent": "пока́зывать — показа́ть", "pronunciation": "pa-ká-zư-vơt — pa-ka-zát", "vi": "chỉ / cho xem (НСВ — СВ · + C3 + C4)", "en": "to show", "example": "Покажи́те, пожа́луйста, студе́нческий биле́т."},
+    {"ru_accent": "дари́ть — подари́ть", "pronunciation": "đa-rít — pa-đa-rít", "vi": "tặng quà (НСВ — СВ · + C3 + C4)", "en": "to give a gift", "example": "Мы подари́ли дру́гу слова́рь."},
+    {"ru_accent": "объясня́ть — объясни́ть", "pronunciation": "ab-yax-nhát — ab-yax-nhít", "vi": "giải thích (НСВ — СВ · + C3 + C4)", "en": "to explain", "example": "Преподава́тель поня́тно объясни́л те́му."},
+    {"ru_accent": "передава́ть — переда́ть", "pronunciation": "pi-ri-đa-vát — pi-ri-đát", "vi": "chuyển / truyền lại (НСВ — СВ · + C3 + C4)", "en": "to pass / hand over", "example": "Переда́й, пожа́луйста, зачётку преподава́телю."},
+    {"ru_accent": "посыла́ть — посла́ть", "pronunciation": "pa-xư-lát — pax-lát", "vi": "gửi đi (НСВ — СВ · + C3 + C4)", "en": "to send", "example": "Я посла́л нау́чному руководи́телю чертёж."},
+    {"ru_accent": "присыла́ть — присла́ть", "pronunciation": "pri-xư-lát — pri-xlát", "vi": "gửi đến (НСВ — СВ · + C3 + C4)", "en": "to send over", "example": "Пришли́ мне, пожа́луйста, файл в Телегра́м."},
+    {"ru_accent": "сове́товать — посове́товать", "pronunciation": "xa-vê-tơ-vơt — pa-xa-vê-tơ-vơt", "vi": "khuyên ai làm gì (НСВ — СВ · + C3 + инф.)", "en": "to advise", "example": "Сове́тую тебе́ нача́ть курса́ч зара́нее."},
+    {"ru_accent": "разреша́ть — разреши́ть", "pronunciation": "raz-ri-sát — raz-ri-sít", "vi": "cho phép (НСВ — СВ · + C3 + инф.)", "en": "to allow / permit", "example": "Декана́т разреши́л пересда́ть экза́мен."},
+    {"ru_accent": "обеща́ть — пообеща́ть", "pronunciation": "a-bi-sát — pa-a-bi-sát", "vi": "hứa (НСВ — СВ · + C3 + инф.)", "en": "to promise", "example": "Ко́ля пообеща́л мне прие́хать сего́дня."},
+    {"ru_accent": "меша́ть — помеша́ть", "pronunciation": "mi-sát — pa-mi-sát", "vi": "làm phiền / cản trở (НСВ — СВ · + C3)", "en": "to disturb / hinder", "example": "Извини́те, я вам не меша́ю?"},
+    {"ru_accent": "нра́виться — понра́виться", "pronunciation": "nrá-vi-txa — pan-rá-vi-txa", "vi": "thích (ai đó thấy thích · C3 + C1)", "en": "to like / appeal to", "example": "Мне о́чень понра́вилась э́та ле́кция."},
+    # Nhóm 3: Động từ + Cách 5 (с кем? / кем? чем?)
+    {"ru_accent": "догова́риваться — договори́ться", "pronunciation": "đa-ga-vá-ri-vơ-txa — đa-ga-va-rí-txa", "vi": "thỏa thuận / hẹn với ai (НСВ — СВ · + с C5)", "en": "to agree / arrange", "example": "Мы договори́лись встре́титься у метро́ в пять."},
+    {"ru_accent": "встреча́ться — встре́титься", "pronunciation": "pxtrê-chá-txa — pxtrê-chi-txa", "vi": "gặp nhau với ai (НСВ — СВ · + с C5)", "en": "to meet up with", "example": "За́втра я встре́чусь с нау́чником."},
+    {"ru_accent": "знако́миться — познако́миться", "pronunciation": "zna-kô-mi-txa — paz-na-kô-mi-txa", "vi": "làm quen với ai (НСВ — СВ · + с C5)", "en": "to get acquainted", "example": "Рад познако́миться с ва́ми!"},
+    {"ru_accent": "сове́товаться — посове́товаться", "pronunciation": "xa-vê-tơ-vơ-txa — pa-xa-vê-tơ-vơ-txa", "vi": "hỏi ý kiến / bàn bạc với ai (НСВ — СВ · + с C5)", "en": "to consult with", "example": "На́до посове́товаться с преподава́телем."},
+    {"ru_accent": "спо́рить — поспо́рить", "pronunciation": "xpô-rit — pax-pô-rit", "vi": "tranh luận với ai (НСВ — СВ · + с C5)", "en": "to argue / debate", "example": "Не сто́ит спо́рить с экзамена́тором."},
+    {"ru_accent": "ссо́риться — поссо́риться", "pronunciation": "xô-ri-txa — pa-xô-ri-txa", "vi": "cãi nhau với ai (НСВ — СВ · + с C5)", "en": "to quarrel", "example": "Они́ поссо́рились, но бы́стро помири́лись."},
+    {"ru_accent": "мири́ться — помири́ться", "pronunciation": "mi-rí-txa — pa-mi-rí-txa", "vi": "làm hòa với ai (НСВ — СВ · + с C5)", "en": "to make up / reconcile", "example": "Друзья́ помири́лись по́сле спо́ра."},
+    {"ru_accent": "занима́ться — заня́ться", "pronunciation": "za-nhi-má-txa — za-nhá-txa", "vi": "học / nghiên cứu / tập luyện (НСВ — СВ · + C5)", "en": "to study / engage in", "example": "Он занима́ется судострое́нием и спо́ртом."},
+    {"ru_accent": "станови́ться — стать", "pronunciation": "xta-na-ví-txa — xtat", "vi": "trở thành (НСВ — СВ · + C5)", "en": "to become", "example": "Я хочу́ стать инжене́ром-кораблестрои́телем."},
+    {"ru_accent": "интересова́ться — заинтересова́ться", "pronunciation": "in-tê-ri-xa-vá-txa — za-in-tê-ri-xa-vá-txa", "vi": "quan tâm đến (НСВ — СВ · + C5)", "en": "to be interested in", "example": "Он интересу́ется подво́дной робототе́хникой."},
+]
+
+
 ALL_VOCAB_DECKS: Dict[str, List[Dict[str, str]]] = {
     **STARTER_VOCAB_DECKS,
     "5. Toán học đại cương (Математика)": DECK_MATH,
@@ -431,6 +480,7 @@ ALL_VOCAB_DECKS: Dict[str, List[Dict[str, str]]] = {
     "9. Kết cấu & Lý thuyết tàu (Кораблестроение)": DECK_SHIPBUILDING,
     "10. Máy tàu, Năng lượng & Tự động hóa": DECK_MARINE_POWER_AUTO,
     "11. Kỹ thuật Đại dương, Robot ngầm & Hàng hải": DECK_OCEAN_TECH_NAV,
+    "12. 42 Cặp động từ НСВ / СВ theo 6 cách": DECK_ASPECT_VERBS_NSV_SV,
 }
 
 VOCAB_DECK_CATEGORIES: Dict[str, List[str]] = {
@@ -439,6 +489,7 @@ VOCAB_DECK_CATEGORIES: Dict[str, List[str]] = {
         "2. Lớp học Dự bị (Подфак)",
         "3. Ký túc xá & Giấy tờ",
         "4. Động từ & Tính từ cốt lõi A1",
+        "12. 42 Cặp động từ НСВ / СВ theo 6 cách",
     ],
     "Toán · Lý · Hóa": [
         "5. Toán học đại cương (Математика)",
@@ -611,6 +662,27 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
                     <b>Quy tắc 5 chữ cái (ж, ч, ш, щ, ц):</b> Không có trọng âm thì viết «е» thay cho «о» (това́рищем, хоро́шего).
                 </div>
             </div>
+
+            <div class="clean-card">
+                <div class="clean-label"><span>Danh từ biến đổi số nhiều đặc biệt (Cách 1 &amp; Cách 2)</span><span>Hay thi nhất</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách 1 số ít</th><th>Cách 1 số nhiều</th><th>Cách 2 số nhiều</th><th>Nghĩa</th></tr></thead>
+                    <tbody>
+                        <tr><td>брат / сестра́</td><td>бра́тья / сёстры</td><td><b>бра́тьев / сестёр</b></td><td>anh em trai / chị em gái</td></tr>
+                        <tr><td>друг / челове́к</td><td>друзья́ / лю́ди</td><td><b>друзе́й / люде́й</b></td><td>bạn bè / con người</td></tr>
+                        <tr><td>ребёнок / сын</td><td>де́ти / сыновья́</td><td><b>дете́й / сынове́й</b></td><td>trẻ em / con trai</td></tr>
+                        <tr><td>мать / дочь</td><td>ма́тери / до́чери</td><td><b>матере́й / дочере́й</b></td><td>mẹ / con gái</td></tr>
+                        <tr><td>стул / лист / де́рево</td><td>сту́лья / ли́стья / дере́вья</td><td><b>сту́льев / ли́стьев / дере́вьев</b></td><td>ghế / lá / cây</td></tr>
+                        <tr><td>письмо́ / окно́</td><td>пи́сьма / о́кна</td><td><b>пи́сем / о́кон</b></td><td>bức thư / cửa sổ</td></tr>
+                    </tbody>
+                </table>
+                <div class="note-callout">
+                    <b>Cấu trúc Có / Không có ở 3 thì:</b><br/>
+                    • <b>Có:</b> У кого́ (C2) + <b>был(а/о/и) / есть / бу́дет</b> + C1 (<i>У меня́ есть слова́рь</i>).<br/>
+                    • <b>Không có:</b> У кого́ (C2) + <b>не́ было / нет / не бу́дет</b> + <b>C2</b> (<i>У меня́ нет вре́мени; За́втра не бу́дет уро́ка</i>).<br/>
+                    <b>Tính từ ngắn đuôi + Cách 5:</b> <i>дово́лен</i> (hài lòng), <i>бога́т</i> (giàu có), <i>изве́стен</i> (nổi tiếng), <i>бо́лен</i> (ốm) + <b>чем? (C5)</b> — VD: <i>Профе́ссор дово́лен рабо́той студе́нтов.</i>
+                </div>
+            </div>
             
 """,
     '2. Tính từ & Đại từ': """
@@ -643,6 +715,24 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
                     </tbody>
                 </table>
             </div>
+
+            <div class="clean-card">
+                <div class="clean-label"><span>Đại từ sở hữu (мой, твой, наш, ваш, свой) &amp; Chỉ định (э́тот)</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách</th><th>Đực / Trung (мой · э́тот)</th><th>Cái (моя́ · э́та)</th><th>Số nhiều (мои́ · э́ти)</th><th>Lưu ý</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1</b></td><td>мой / моё · э́тот / э́то</td><td>моя́ · э́та</td><td>мои́ · э́ти</td><td><b>его́, её, их</b> không đổi ở cả 6 cách</td></tr>
+                        <tr><td><b>2</b></td><td>моего́ · э́того</td><td>мое́й · э́той</td><td>мои́х · э́тих</td><td><b>наш/ваш:</b> на́шего, на́шей, на́ших</td></tr>
+                        <tr><td><b>3</b></td><td>моему́ · э́тому</td><td>мое́й · э́той</td><td>мои́м · э́тим</td><td><b>свой</b> chia hệt như <b>мой</b></td></tr>
+                        <tr><td><b>4</b></td><td>Vật=C1 · Người=C2</td><td>мою́ · э́ту</td><td>Vật=C1 · Người=C2</td><td><i>Я чита́ю э́ту кни́гу / вижу э́того дру́га</i></td></tr>
+                        <tr><td><b>5</b></td><td>мои́м · э́тим</td><td>мое́й · э́той</td><td>мои́ми · э́тими</td><td><i>с мои́м дру́гом · с э́той гру́ппой</i></td></tr>
+                        <tr><td><b>6</b></td><td>моём · э́том</td><td>мое́й · э́той</td><td>мои́х · э́тих</td><td><i>в на́шем университе́те · об э́том</i></td></tr>
+                    </tbody>
+                </table>
+                <div class="note-callout">
+                    <b>Quy tắc thêm «н-» sau giới từ:</b> Khi ngôi thứ 3 (<i>он, она́, оно́, они́</i>) đứng ngay sau giới từ ở các cách 2–6, bắt buộc thêm <b>н-</b>: <i>у <b>него́</b>, к <b>ней</b>, с <b>ни́ми</b>, о <b>нём</b></i> (nhưng khi là sở hữu thì KHÔNG thêm: <i>у его́ дру́га</i>).
+                </div>
+            </div>
             
 """,
     '3. Động từ & Thể (НСВ/СВ)': """
@@ -664,6 +754,41 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
                     <b>НСВ</b> = quá trình, lặp lại (ка́ждый день, до́лго) · <b>СВ</b> = kết quả dứt điểm 1 lần (уже́, наконе́ц; không có thì hiện tại).
                 </div>
             </div>
+
+            <div class="clean-card">
+                <div class="clean-label"><span>So sánh 3 Thì của Thể Chưa hoàn thành (НСВ) &amp; Hoàn thành (СВ)</span><span>Cốt lõi động từ</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Thì</th><th>Thể НСВ (Quá trình · Lặp lại · Không nhấn kết quả)</th><th>Thể СВ (1 lần · Dứt điểm · Có kết quả)</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>Quá khứ</b></td><td>чита́л(а/и) — <i>Вчера́ я до́лго чита́л текст.</i></td><td>прочита́л(а/и) — <i>Я уже́ прочита́л весь текст.</i></td></tr>
+                        <tr><td><b>Hiện tại</b></td><td>чита́ю, чита́ешь... — <i>Я сейча́с чита́ю.</i></td><td><b>KHÔNG CÓ thì hiện tại!</b></td></tr>
+                        <tr><td><b>Tương lai</b></td><td><b>бу́ду + nguyên thể НСВ</b> — <i>За́втра я бу́ду чита́ть рома́н.</i></td><td><b>Chia trực tiếp СВ</b> — <i>За́втра я прочита́ю рома́н.</i></td></tr>
+                    </tbody>
+                </table>
+                <div class="note-callout">
+                    <b>Cấu trúc rủ rê (Thức mệnh lệnh ngôi 1):</b> <b>Дава́й / Дава́йте + ngôi «мы» của động từ СВ</b>!<br/>
+                    VD: <i>Дава́й пойдём в кино́!</i> (Chúng mình đi xem phim nhé!) · <i>Дава́йте споём пе́сню!</i> · <i>Дава́й пообе́даем вме́сте!</i><br/>
+                    <b>Thời gian Cách 4 với НСВ vs СВ:</b> НСВ không giới từ (<i>Он чита́л текст 20 мину́т</i>) · СВ dùng <b>за</b> (hoàn thành trong bao lâu: <i>сде́лал за 30 мину́т</i>) hoặc <b>на</b> (trong hạn bao lâu: <i>взял кни́гу на неде́лю</i>).
+                </div>
+            </div>
+
+            <div class="clean-card">
+                <div class="clean-label"><span>Bảng tổng hợp Cặp động từ НСВ — СВ hay dùng nhất theo Cách chi phối</span><span>Ưu tiên ôn thi</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Nhóm Cách chi phối</th><th>Các cặp động từ НСВ — СВ thiết yếu</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>+ Cách 4</b><br/>(Кого́? Что?)</td><td>
+                            <b>ви́деть — уви́деть</b> (thấy) · <b>писа́ть — написа́ть</b> (viết) · <b>чита́ть — прочита́ть</b> (đọc) · <b>повторя́ть — повтори́ть</b> (nhắc lại) · <b>изуча́ть — изучи́ть</b> (nghiên cứu) · <b>понима́ть — поня́ть</b> (hiểu) · <b>покупа́ть — купи́ть</b> (mua) · <b>гото́вить — пригото́вить</b> (nấu/chuẩn bị) · <b>де́лать — сде́лать</b> (làm) · <b>вспомина́ть — вспо́мнить</b> (nhớ lại) · <b>встреча́ть — встре́тить</b> (gặp/đón) · <b>поздравля́ть — поздра́вить</b> (chúc mừng) · <b>открыва́ть — откры́ть</b> (mở) · <b>закрыва́ть — закры́ть</b> (đóng) · <b>получа́ть — получи́ть</b> (nhận) · <b>приглаша́ть — пригласи́ть</b> (mời) · <b>исправля́ть — испра́вить</b> (sửa lỗi) · <b>проси́ть — попроси́ть</b> (nhờ) · <b>спра́шивать — спроси́ть</b> (hỏi) · <b>реша́ть — реши́ть</b> (giải/quyết định) · <b>слу́шать — послу́шать</b> (nghe) · <b>смотре́ть — посмотре́ть</b> (xem) · <b>учи́ть — вы́учить</b> (học thuộc) · <b>петь — спеть</b> (hát) · <b>благодари́ть — поблагодари́ть</b> (cảm ơn)
+                        </td></tr>
+                        <tr><td><b>+ Cách 3</b><br/>(Кому́? + C4 / о C6 / инф.)</td><td>
+                            <b>звони́ть — позвони́ть</b> (gọi) · <b>говори́ть — сказа́ть</b> (nói) · <b>сообща́ть — сообщи́ть</b> (báo tin) · <b>расска́зывать — рассказа́ть</b> (kể) · <b>пока́зывать — показа́ть</b> (cho xem) · <b>дава́ть — дать</b> (cho) · <b>дари́ть — подари́ть</b> (tặng) · <b>объясня́ть — объясни́ть</b> (giải thích) · <b>передава́ть — переда́ть</b> (chuyển) · <b>посыла́ть — посла́ть</b> (gửi đi) · <b>присыла́ть — присла́ть</b> (gửi đến) · <b>помога́ть — помо́чь</b> (giúp) · <b>сове́товать — посове́товать</b> (khuyên) · <b>разреша́ть — разреши́ть</b> (cho phép) · <b>обеща́ть — пообеща́ть</b> (hứa) · <b>меша́ть — помеша́ть</b> (làm phiền) · <b>нра́виться — понра́виться</b> (thích)
+                        </td></tr>
+                        <tr><td><b>+ Cách 5</b><br/>(с кем? / кем? чем?)</td><td>
+                            <b>догова́риваться — договори́ться</b> (thỏa thuận) · <b>встреча́ться — встре́титься</b> (gặp nhau) · <b>знако́миться — познако́миться</b> (làm quen) · <b>сове́товаться — посове́товаться</b> (bàn bạc) · <b>спо́рить — поспо́рить</b> (tranh luận) · <b>ссо́риться — поссо́риться</b> (cãi nhau) · <b>мири́ться — помири́ться</b> (làm hòa) · <b>занима́ться — заня́ться</b> (học/tập) · <b>станови́ться — стать</b> (trở thành) · <b>интересова́ться — заинтересова́ться</b> (quan tâm) · <b>владе́ть</b> (nắm vững) · <b>управля́ть</b> (điều khiển)
+                        </td></tr>
+                    </tbody>
+                </table>
+            </div>
             
 """,
     '4. Động từ chuyển động': """
@@ -679,6 +804,27 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
                         <tr><td><b>Bay</b></td><td>лете́ть</td><td>лета́ть</td><td>до- (tới đích), про- (đi qua)</td></tr>
                     </tbody>
                 </table>
+            </div>
+
+            <div class="clean-card">
+                <div class="clean-label"><span>Đầy đủ 14 cặp Động từ chuyển động &amp; 14 Tiền tố đổi thể (НСВ ↔ СВ)</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Nghĩa</th><th>Nhóm 1 (1 hướng)</th><th>Nhóm 2 (Đa hướng)</th><th>Tiền tố thông dụng</th><th>Ý nghĩa tiền tố</th></tr></thead>
+                    <tbody>
+                        <tr><td>Đi bộ / Đi xe</td><td>идти́ / е́хать</td><td>ходи́ть / е́здить</td><td><b>по- / при- / у-</b></td><td>bắt đầu đi / đến nơi / rời đi</td></tr>
+                        <tr><td>Chạy / Bay</td><td>бежа́ть / лете́ть</td><td>бе́гать / лета́ть</td><td><b>в- (во-) / вы-</b></td><td>đi vào trong / đi ra ngoài</td></tr>
+                        <tr><td>Bơi, đi tàu / Leo</td><td>плыть / лезть</td><td>пла́вать / ла́зать</td><td><b>под- / от-</b></td><td>lại gần / lùi ra xa</td></tr>
+                        <tr><td>Bò / Lang thang</td><td>ползти́ / брести́</td><td>по́лзать / броди́ть</td><td><b>пере- / про-</b></td><td>băng qua / đi xuyên qua, đi lố</td></tr>
+                        <tr><td>Dẫn dắt / Chở xe</td><td>вести́ / везти́</td><td>води́ть / вози́ть</td><td><b>за- / до-</b></td><td>ghé qua / đi tới tận đích</td></tr>
+                        <tr><td>Mang tay / Xách</td><td>нести́ / тащи́ть</td><td>носи́ть / таска́ть</td><td><b>об- (обо-) / с-</b></td><td>đi vòng quanh / đi xuống, tụ họp</td></tr>
+                        <tr><td>Đuổi theo / Lăn</td><td>гнать / кати́ть</td><td>гоня́ть / ката́ть</td><td><b>раз- (рас-) / на-</b></td><td>tản ra nhiều hướng / va chạm</td></tr>
+                    </tbody>
+                </table>
+                <div class="note-callout">
+                    <b>Quy tắc vàng tạo cặp thể СВ / НСВ cho Động từ chuyển động:</b><br/>
+                    • <b>Nhóm 1 (1 chiều) + Tiền tố → Thể Hoàn thành (СВ)</b>: <i>прийти́, прие́хать, уйти́, вы́йти, зайти́</i>.<br/>
+                    • <b>Nhóm 2 (đa chiều) + Tiền tố → Thể Chưa hoàn thành (НСВ)</b>: <i>приходи́ть, приезжа́ть, уходи́ть, выходи́ть, заходи́ть</i>.
+                </div>
             </div>
             
 """,
