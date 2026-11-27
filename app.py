@@ -60,7 +60,6 @@ from ui_components import (
     bootstrap_remembered_tokens_js,
     clear_remembered_admin,
     clear_remembered_login,
-    esc,
     get_author_avatar_data_uri,
     get_cookie_manager,
     inject_theme_css,
@@ -70,7 +69,6 @@ from ui_components import (
     render_vocab_and_practice_tab,
     save_remembered_admin,
     save_remembered_login,
-    svg_icon,
 )
 
 
@@ -214,11 +212,14 @@ def main() -> None:
     with st.sidebar:
         render_html(
             f"""
-            <div class="sidebar-brand-strip">
-                <img src="{avatar_uri}" class="sidebar-brand-img" alt="Mai Văn Minh" />
-                <div style="min-width:0;">
-                    <div style="font-size:0.86rem;font-weight:600;line-height:1.2;">Mai Văn Minh</div>
-                    <div style="font-size:0.74rem;opacity:0.75;line-height:1.25;">SV năm 4 · Đóng tàu · СПбГМТУ</div>
+            <div class="sidebar-author-box">
+                <img src="{avatar_uri}" class="sidebar-author-img" alt="Mai Văn Minh" />
+                <div>
+                    <div style="font-size:0.95rem;font-weight:700;">Mai Văn Minh</div>
+                    <div style="font-size:0.79rem;opacity:0.75;line-height:1.35;">
+                        Sinh viên năm 4 · Đóng tàu<br/>
+                        СПбГМТУ (Xanh-Petecbua)
+                    </div>
                 </div>
             </div>
             """
@@ -265,7 +266,7 @@ def main() -> None:
                         st.session_state["ask_remember_login"] = False
                         st.rerun()
             elif st.session_state.get("is_login_remembered"):
-                st.caption(f"Đồng bộ: {sync_badge} · Đã lưu đăng nhập")
+                st.caption(f"Đồng bộ: {sync_badge} · Đã lưu đăng nhập tự động")
             else:
                 st.caption(f"Đồng bộ: {sync_badge} · Phiên tạm thời")
                 if st.button("Lưu đăng nhập trên thiết bị này", key="btn_save_remember_later", use_container_width=True):
@@ -296,26 +297,12 @@ def main() -> None:
                     pass
                 st.rerun()
         else:
-            auth_opts = ["Đăng nhập", "Đăng ký mới"]
-            if st.session_state.get("sidebar_auth_mode") not in auth_opts:
-                st.session_state["sidebar_auth_mode"] = auth_opts[0]
-            if st.session_state.get("sidebar_auth_seg") is None:
-                st.session_state["sidebar_auth_seg"] = st.session_state["sidebar_auth_mode"]
-            picked_auth = st.segmented_control(
-                "Chế độ tài khoản",
-                options=auth_opts,
-                selection_mode="single",
-                label_visibility="collapsed",
-                key="sidebar_auth_seg",
-            )
-            if picked_auth:
-                st.session_state["sidebar_auth_mode"] = picked_auth
-            auth_mode = st.session_state["sidebar_auth_mode"]
+            auth_mode = st.radio("Chế độ tài khoản", ["Đăng nhập", "Đăng ký mới"], horizontal=True, label_visibility="collapsed")
             if auth_mode == "Đăng nhập":
                 with st.form("login_form"):
                     l_user = st.text_input("Tên đăng nhập / Email", placeholder="vd: minh2003")
                     l_pass = st.text_input("Mật khẩu", type="password")
-                    l_remember = st.checkbox("Ghi nhớ đăng nhập", value=True)
+                    l_remember = st.checkbox("Ghi nhớ đăng nhập trên thiết bị này", value=True)
                     if st.form_submit_button("Đăng nhập & Đồng bộ", type="primary", use_container_width=True):
                         u_clean = _normalize_username(l_user)
                         record = db_get_user(u_clean)
@@ -343,7 +330,7 @@ def main() -> None:
                     r_name = st.text_input("Họ và tên", placeholder="Nguyễn Văn A")
                     r_year = st.selectbox("Năm học", options=STUDENT_YEAR_OPTIONS, index=3)
                     r_uni = st.text_input("Trường theo học", placeholder="СПбГМТУ, ИТМО, СПбГУ...")
-                    r_remember = st.checkbox("Ghi nhớ đăng nhập", value=True)
+                    r_remember = st.checkbox("Ghi nhớ đăng nhập trên thiết bị này", value=True)
                     if st.form_submit_button("Tạo tài khoản", type="primary", use_container_width=True):
                         u_clean = _normalize_username(r_user)
                         if len(u_clean) < 3 or len(r_pass) < 4 or not r_name.strip() or not r_uni.strip():
@@ -432,13 +419,14 @@ def main() -> None:
             else:
                 st.caption("Chưa có Key — đang dùng dịch cơ bản.")
 
-        with st.expander("Hướng dẫn lấy API Key riêng (30 giây)"):
+        with st.expander("Hướng dẫn lấy API Key riêng miễn phí (30 giây)"):
             st.markdown(
                 "1. Mở [Google AI Studio](https://aistudio.google.com/app/apikey) và đăng nhập bằng Gmail.\n"
                 "2. Bấm **Create API key** để tạo khóa miễn phí.\n"
                 "3. Sao chép khóa và dán vào ô **API Key cá nhân** ở trên để lưu vào tài khoản."
             )
 
+        st.markdown("---")
         with st.expander("Dành cho tác giả"):
             if not DEFAULT_AUTHOR_PASSWORD:
                 st.warning(
@@ -509,17 +497,14 @@ def main() -> None:
                     st.rerun()
 
     # HEADER + NÚT BẬT/TẮT NỀN SÁNG/TỐI
-    hdr_c1, hdr_c2 = st.columns([4.7, 1.3], vertical_alignment="center")
+    hdr_c1, hdr_c2 = st.columns([5.2, 1.1])
     with hdr_c1:
         render_html(
             f"""
-            <div class="brand-row">
-                <div class="brand-left">
-                    <div class="brand-mark">AM</div>
-                    <div style="min-width:0;">
-                        <h1 class="minimal-title">Anh Minh Translate</h1>
-                        <div class="minimal-sub">Dịch nhanh Nga – Việt · Chia 6 cách · Ôn tập từ vựng đồng bộ</div>
-                    </div>
+            <div class="minimal-header" style="margin-bottom:8px;">
+                <div>
+                    <h1 class="minimal-title">Anh Minh Translate</h1>
+                    <div class="minimal-sub">Dịch nhanh Nga – Việt, chia 6 cách, đồng nghĩa/trái nghĩa &amp; ôn tập từ vựng đồng bộ</div>
                 </div>
                 <div class="author-chip">
                     <img src="{avatar_uri}" class="author-chip-img" alt="Mai Văn Minh" />
@@ -532,18 +517,17 @@ def main() -> None:
             """
         )
     with hdr_c2:
-        toggle_txt = "Nền sáng" if is_dark else "Nền tối"
-        toggle_icon = ":material/light_mode:" if is_dark else ":material/dark_mode:"
-        if st.button(toggle_txt, icon=toggle_icon, key="top_theme_toggle", use_container_width=True):
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        toggle_txt = "☀ Nền sáng" if is_dark else "☾ Nền tối"
+        if st.button(toggle_txt, key="top_theme_toggle", use_container_width=True):
             st.session_state["theme_mode"] = "light" if is_dark else "dark"
             sync_current_account_to_db()
             st.rerun()
-    render_html('<div class="header-divider"></div>')
 
     tab1, tab2, tab3 = st.tabs(["Dịch & Ngữ pháp", "Từ vựng & Ôn tập", "Kiến thức tiếng Nga"])
 
     with tab1:
-        dir_c1, dir_c2 = st.columns([4.6, 1.4], vertical_alignment="center")
+        dir_c1, dir_c2 = st.columns([5, 1])
         with dir_c1:
             direction = st.selectbox(
                 "Chiều dịch",
@@ -553,26 +537,22 @@ def main() -> None:
             )
             st.session_state["selected_direction"] = direction
         with dir_c2:
-            if st.button("Đổi chiều", icon=":material/swap_horiz:", use_container_width=True):
+            if st.button("⇄ Đổi chiều", use_container_width=True):
                 if st.session_state["selected_direction"] == DIRECTION_OPTIONS[1]:
                     st.session_state["selected_direction"] = DIRECTION_OPTIONS[2]
                 else:
                     st.session_state["selected_direction"] = DIRECTION_OPTIONS[1]
                 st.rerun()
 
-        opt_c1, opt_c2 = st.columns([2.35, 3.65], vertical_alignment="center")
+        opt_c1, opt_c2 = st.columns([2.3, 1.5])
         with opt_c1:
-            lvl_opts = ["Người mới (A0–A1)", "Chuyên sâu"]
-            cur_lvl_lbl = lvl_opts[0] if st.session_state.get("learner_level", "beginner") == "beginner" else lvl_opts[1]
-            if st.session_state.get("learner_lvl_seg") is None:
-                st.session_state["learner_lvl_seg"] = cur_lvl_lbl
-            level_label = st.segmented_control(
+            level_label = st.radio(
                 "Chế độ giải thích",
-                options=lvl_opts,
-                selection_mode="single",
+                options=["Người mới (A0–A1)", "Chuyên sâu"],
+                index=0 if st.session_state.get("learner_level", "beginner") == "beginner" else 1,
+                horizontal=True,
                 label_visibility="collapsed",
-                key="learner_lvl_seg",
-            ) or cur_lvl_lbl
+            )
             st.session_state["learner_level"] = "beginner" if "Người mới" in level_label else "advanced"
         with opt_c2:
             st.session_state["tts_slow_mode"] = st.checkbox(
@@ -586,12 +566,12 @@ def main() -> None:
         source_text = st.text_area(
             "Nội dung cần dịch",
             key="input_text_area",
-            height=136,
+            height=145,
             label_visibility="collapsed",
             placeholder="Nhập từ, câu hoặc đoạn văn (tiếng Nga hay tiếng Việt đều tự nhận diện chuẩn) để dịch, chia 6 cách, chia động từ và xem ví dụ...",
         )
 
-        b1, b2, b3, b4 = st.columns([1.95, 1.55, 0.9, 2.6], vertical_alignment="center")
+        b1, b2, b3, b4 = st.columns([1.8, 1.4, 1.0, 2.8])
         with b1:
             translate_clicked = st.button("Dịch & Phân tích", type="primary", use_container_width=True)
         with b2:
@@ -604,9 +584,7 @@ def main() -> None:
             if source_text.strip():
                 k_map = {"word": "Từ / Cụm ngắn", "sentence": "Câu", "paragraph": "Đoạn văn"}
                 eff_preview = resolve_effective_direction(source_text, direction)
-                render_html(
-                    f'<div class="meta-pill"><span class="meta-pill-tag">{esc(k_map[classify_input_type(source_text)])} · {esc(eff_preview)} · {len(source_text.split())} từ</span></div>'
-                )
+                st.caption(f"{k_map[classify_input_type(source_text)]} · {eff_preview} · {len(source_text.split())} từ")
 
         if tts_clicked and source_text.strip():
             has_cyr = bool(re.search(r"[а-яА-ЯёЁ]", source_text))
@@ -670,32 +648,11 @@ def main() -> None:
                 st.session_state.get("last_meta_badge", "Dịch nhanh"),
                 is_dark=is_dark,
             )
-        elif not source_text.strip():
-            render_html(
-                f"""
-                <div class="empty-state-box">
-                    <div class="empty-state-title">{svg_icon("sparkles")}<span>Sẵn sàng dịch &amp; phân tích ngữ pháp Nga – Việt</span></div>
-                    <div class="empty-state-sub">Nhập nội dung ở trên hoặc chọn nhanh một mẫu bên dưới để điền thử:</div>
-                </div>
-                """
-            )
-            sample_prompts = [
-                ("корабль", "Danh từ kỹ thuật"),
-                ("остойчивость судна", "Thuật ngữ СПбГМТУ"),
-                ("Где находится деканат?", "Giao tiếp"),
-                ("препод", "Tiếng lóng SV"),
-            ]
-            sp_cols = st.columns(4)
-            for sp_i, (sp_txt, sp_tag) in enumerate(sample_prompts):
-                with sp_cols[sp_i]:
-                    if st.button(f"{sp_txt}", key=f"sample_prompt_{sp_i}", help=sp_tag, use_container_width=True):
-                        st.session_state["pending_input_text"] = sp_txt
-                        st.rerun()
 
         if st.session_state["translation_history"]:
             with st.expander(f"Lịch sử dịch đã đồng bộ ({len(st.session_state['translation_history'])})"):
                 for idx, h in enumerate(st.session_state["translation_history"][:15]):
-                    hc1, hc2 = st.columns([5, 1], vertical_alignment="center")
+                    hc1, hc2 = st.columns([5, 1])
                     with hc1:
                         st.markdown(f"`{h['time']}` · {h['preview']}")
                     with hc2:

@@ -559,79 +559,70 @@ KNOWLEDGE_HUB_TOPICS: List[str] = [
 KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
     '0. Nhập môn: Chữ cái, Cách đọc & Giống': """
 <div class="clean-card">
-    <div class="clean-label"><span>Phần A · Bảng 33 chữ cái tiếng Nga chia 3 nhóm dễ nhớ</span><span class="label-badge">А — Я · 33 chữ</span></div>
-    <div class="table-wrap">
-        <table class="clean-table">
-            <thead><tr><th style="width:18%;white-space:nowrap;">Chữ cái</th><th style="width:42%;">Cách đọc tiếng Việt gần đúng</th><th style="width:40%;">Ví dụ có trọng âm</th></tr></thead>
-            <tbody>
-                <tr class="table-group-row"><td colspan="3">Nhóm 1 · Nhìn &amp; đọc gần giống tiếng Việt / Latin</td></tr>
-                <tr><td><b>А а</b></td><td>a</td><td><b>а́дрес</b> (địa chỉ)</td></tr>
-                <tr><td><b>Е е</b></td><td>yê / ê</td><td><b>е́сли</b> (nếu)</td></tr>
-                <tr><td><b>К к</b></td><td>k</td><td><b>кни́га</b> (quyển sách)</td></tr>
-                <tr><td><b>М м</b></td><td>m</td><td><b>ма́ма</b> (mẹ)</td></tr>
-                <tr><td><b>О о</b></td><td>ô (có trọng âm) / a (không trọng âm)</td><td><b>окно́</b> (cửa sổ)</td></tr>
-                <tr><td><b>Т т</b></td><td>t (không bật hơi)</td><td><b>тетра́дь</b> (quyển vở)</td></tr>
-                <tr class="table-group-row"><td colspan="3">Nhóm 2 · Bẫy thị giác (viết giống Latin nhưng đọc khác)</td></tr>
-                <tr><td><b>В в</b></td><td>v (như v tiếng Việt)</td><td><b>вода́</b> (nước uống)</td></tr>
-                <tr><td><b>Н н</b></td><td>n (như n tiếng Việt)</td><td><b>но́вый</b> (mới)</td></tr>
-                <tr><td><b>Р р</b></td><td>r (rung đầu lưỡi)</td><td><b>ру́чка</b> (bút bi)</td></tr>
-                <tr><td><b>С с</b></td><td>x / s nhẹ</td><td><b>сло́во</b> (từ vựng)</td></tr>
-                <tr><td><b>У у</b></td><td>u</td><td><b>уро́к</b> (tiết học)</td></tr>
-                <tr><td><b>Х х</b></td><td>kh (như kh tiếng Việt)</td><td><b>хлеб</b> (bánh mì)</td></tr>
-                <tr class="table-group-row"><td colspan="3">Nhóm 3 · Chữ Cyrillic đặc trưng &amp; 2 dấu</td></tr>
-                <tr><td><b>Б б</b></td><td>b</td><td><b>биле́т</b> (vé / thẻ)</td></tr>
-                <tr><td><b>Г г</b></td><td>g</td><td><b>го́род</b> (thành phố)</td></tr>
-                <tr><td><b>Д д</b></td><td>đ</td><td><b>дом</b> (nhà)</td></tr>
-                <tr><td><b>Ё ё</b></td><td>yô (luôn mang trọng âm)</td><td><b>ёлка</b> (cây thông)</td></tr>
-                <tr><td><b>Ж ж</b></td><td>gi / zh (uốn lưỡi)</td><td><b>жизнь</b> (cuộc sống)</td></tr>
-                <tr><td><b>З з</b></td><td>z (rung cổ họng)</td><td><b>за́втра</b> (ngày mai)</td></tr>
-                <tr><td><b>И и</b></td><td>i</td><td><b>и́мя</b> (tên)</td></tr>
-                <tr><td><b>Й й</b></td><td>i ngắn (ghép vần -ai / -oi)</td><td><b>музе́й</b> (bảo tàng)</td></tr>
-                <tr><td><b>Л л</b></td><td>l</td><td><b>ла́мпа</b> (cái đèn)</td></tr>
-                <tr><td><b>П п</b></td><td>p (mím môi)</td><td><b>па́спорт</b> (hộ chiếu)</td></tr>
-                <tr><td><b>Ф ф</b></td><td>ph / f</td><td><b>факульте́т</b> (khoa)</td></tr>
-                <tr><td><b>Ц ц</b></td><td>tx (bật nhanh đầu lưỡi)</td><td><b>цена́</b> (giá cả)</td></tr>
-                <tr><td><b>Ч ч</b></td><td>ch (mềm, nhẹ)</td><td><b>час</b> (giờ)</td></tr>
-                <tr><td><b>Ш ш</b></td><td>s (uốn lưỡi cứng)</td><td><b>шко́ла</b> (trường học)</td></tr>
-                <tr><td><b>Щ щ</b></td><td>x-ch (mềm dài)</td><td><b>общежи́тие</b> (ký túc xá)</td></tr>
-                <tr><td><b>Ъ ъ</b></td><td>Dấu cứng (tách âm, không phát âm)</td><td><b>объявле́ние</b> (thông báo)</td></tr>
-                <tr><td><b>Ы ы</b></td><td>ư / ưi (kéo lưỡi lùi sau)</td><td><b>сын</b> (con trai)</td></tr>
-                <tr><td><b>Ь ь</b></td><td>Dấu mềm (làm mềm phụ âm trước)</td><td><b>слова́рь</b> (từ điển)</td></tr>
-                <tr><td><b>Э э</b></td><td>ê (mở miệng hơn е)</td><td><b>экза́мен</b> (kỳ thi)</td></tr>
-                <tr><td><b>Ю ю</b></td><td>yu / iu</td><td><b>юг</b> (phương Nam)</td></tr>
-                <tr><td><b>Я я</b></td><td>ya / ia</td><td><b>я́блоко</b> (quả táo)</td></tr>
-            </tbody>
-        </table>
-    </div>
+    <div class="clean-label"><span>Phần A · Bảng 33 chữ cái tiếng Nga chia 3 nhóm dễ nhớ</span><span>А — Я (33 chữ)</span></div>
+    <table class="clean-table">
+        <thead><tr><th>Nhóm</th><th>Chữ cái</th><th>Cách đọc tiếng Việt gần đúng</th><th>Ví dụ có trọng âm</th></tr></thead>
+        <tbody>
+            <tr><td rowspan="6"><b>Nhóm 1</b><br/>Nhìn &amp; đọc gần giống</td><td><b>А а</b></td><td>a</td><td><b>а́дрес</b> (địa chỉ)</td></tr>
+            <tr><td><b>Е е</b></td><td>yê / ê</td><td><b>е́сли</b> (nếu)</td></tr>
+            <tr><td><b>К к</b></td><td>k</td><td><b>кни́га</b> (quyển sách)</td></tr>
+            <tr><td><b>М м</b></td><td>m</td><td><b>ма́ма</b> (mẹ)</td></tr>
+            <tr><td><b>О о</b></td><td>ô (có trọng âm) / a (không trọng âm)</td><td><b>окно́</b> (cửa sổ)</td></tr>
+            <tr><td><b>Т т</b></td><td>t (không bật hơi)</td><td><b>тетра́дь</b> (quyển vở)</td></tr>
+            <tr><td rowspan="6"><b>Nhóm 2</b><br/>Bẫy thị giác (giống Latin nhưng đọc khác)</td><td><b>В в</b></td><td>v (như v tiếng Việt)</td><td><b>вода́</b> (nước uống)</td></tr>
+            <tr><td><b>Н н</b></td><td>n (như n tiếng Việt)</td><td><b>но́вый</b> (mới)</td></tr>
+            <tr><td><b>Р р</b></td><td>r (rung đầu lưỡi)</td><td><b>ру́чка</b> (bút bi)</td></tr>
+            <tr><td><b>С с</b></td><td>x / s nhẹ</td><td><b>сло́во</b> (từ vựng)</td></tr>
+            <tr><td><b>У у</b></td><td>u</td><td><b>уро́к</b> (tiết học)</td></tr>
+            <tr><td><b>Х х</b></td><td>kh (như kh tiếng Việt)</td><td><b>хлеб</b> (bánh mì)</td></tr>
+            <tr><td rowspan="21"><b>Nhóm 3</b><br/>Chữ Cyrillic đặc trưng &amp; 2 dấu</td><td><b>Б б</b></td><td>b</td><td><b>биле́т</b> (vé / thẻ)</td></tr>
+            <tr><td><b>Г г</b></td><td>g</td><td><b>го́род</b> (thành phố)</td></tr>
+            <tr><td><b>Д д</b></td><td>đ</td><td><b>дом</b> (nhà)</td></tr>
+            <tr><td><b>Ё ё</b></td><td>yô (luôn mang trọng âm)</td><td><b>ёлка</b> (cây thông)</td></tr>
+            <tr><td><b>Ж ж</b></td><td>gi / zh (uốn lưỡi)</td><td><b>жизнь</b> (cuộc sống)</td></tr>
+            <tr><td><b>З з</b></td><td>z (rung cổ họng)</td><td><b>за́втра</b> (ngày mai)</td></tr>
+            <tr><td><b>И и</b></td><td>i</td><td><b>и́мя</b> (tên)</td></tr>
+            <tr><td><b>Й й</b></td><td>i ngắn (ghép vần -ai / -oi)</td><td><b>музе́й</b> (bảo tàng)</td></tr>
+            <tr><td><b>Л л</b></td><td>l</td><td><b>ла́мпа</b> (cái đèn)</td></tr>
+            <tr><td><b>П п</b></td><td>p (mím môi)</td><td><b>па́спорт</b> (hộ chiếu)</td></tr>
+            <tr><td><b>Ф ф</b></td><td>ph / f</td><td><b>факульте́т</b> (khoa)</td></tr>
+            <tr><td><b>Ц ц</b></td><td>tx (bật nhanh đầu lưỡi)</td><td><b>цена́</b> (giá cả)</td></tr>
+            <tr><td><b>Ч ч</b></td><td>ch (mềm, nhẹ)</td><td><b>час</b> (giờ)</td></tr>
+            <tr><td><b>Ш ш</b></td><td>s (uốn lưỡi cứng)</td><td><b>шко́ла</b> (trường học)</td></tr>
+            <tr><td><b>Щ щ</b></td><td>x-ch (mềm dài)</td><td><b>общежи́тие</b> (ký túc xá)</td></tr>
+            <tr><td><b>Ъ ъ</b></td><td>Dấu cứng (tách âm, không phát âm)</td><td><b>объявле́ние</b> (thông báo)</td></tr>
+            <tr><td><b>Ы ы</b></td><td>ư / ưi (kéo lưỡi lùi sau)</td><td><b>сын</b> (con trai)</td></tr>
+            <tr><td><b>Ь ь</b></td><td>Dấu mềm (làm mềm phụ âm trước)</td><td><b>слова́рь</b> (từ điển)</td></tr>
+            <tr><td><b>Э э</b></td><td>ê (mở miệng hơn е)</td><td><b>экза́мен</b> (kỳ thi)</td></tr>
+            <tr><td><b>Ю ю</b></td><td>yu / iu</td><td><b>юг</b> (phương Nam)</td></tr>
+            <tr><td><b>Я я</b></td><td>ya / ia</td><td><b>я́блоко</b> (quả táo)</td></tr>
+        </tbody>
+    </table>
 </div>
 
 <div class="clean-card">
-    <div class="clean-label"><span>Phần B · 4 Quy tắc đọc sống còn cho người Việt</span><span class="label-badge">Phát âm chuẩn A0–A1</span></div>
-    <div class="table-wrap">
-        <table class="clean-table">
-            <thead><tr><th>Quy tắc</th><th>Bản chất</th><th>Ví dụ thực tế</th></tr></thead>
-            <tbody>
-                <tr><td><b>1. Trọng âm &amp; Giảm âm (Аканье)</b></td><td><b>О</b> không có trọng âm đọc thành <b>А</b>; <b>Е / Я</b> không trọng âm đọc nhẹ thành <b>И</b>.</td><td><b>молоко́</b> → ma-la-kô · <b>хорошо́</b> → kha-ra-shô · <b>тетра́дь</b> → chi-trát</td></tr>
-                <tr><td><b>2. Vô thanh hóa phụ âm cuối</b></td><td>Phụ âm hữu thanh đứng cuối từ bị đọc thành âm vô thanh: <b>б→п, в→ф, г→к, д→т, ж→ш, з→с</b>.</td><td><b>друг</b> → đrúc · <b>год</b> → gôt · <b>хлеб</b> → khơ-lếp · <b>глаз</b> → gơ-láx</td></tr>
-                <tr><td><b>3. Cặp hay nhầm: Ш vs Щ · И vs Ы · Р</b></td><td><b>Ш</b> uốn lưỡi cứng, <b>Щ</b> mềm và kéo dài; <b>И</b> cười dẹt, <b>Ы</b> kéo lưỡi lùi về sau; <b>Р</b> rung đầu lưỡi.</td><td><b>шко́ла</b> (cứng) vs <b>общежи́тие</b> (mềm) · <b>мир</b> vs <b>мы</b></td></tr>
-                <tr><td><b>4. Dấu mềm (Ь) &amp; Dấu cứng (Ъ)</b></td><td><b>Ь</b> không tự phát âm nhưng làm mềm phụ âm đứng trước; <b>Ъ</b> tách phụ âm với nguyên âm sau (о/е/я/ю).</td><td><b>мать</b> (t' mềm) · <b>объявле́ние</b> (đọc tách ob-yav-lê-ni-yê)</td></tr>
-            </tbody>
-        </table>
-    </div>
+    <div class="clean-label"><span>Phần B · 4 Quy tắc đọc sống còn cho người Việt</span><span>Phát âm chuẩn A0–A1</span></div>
+    <table class="clean-table">
+        <thead><tr><th>Quy tắc</th><th>Bản chất</th><th>Ví dụ thực tế</th></tr></thead>
+        <tbody>
+            <tr><td><b>1. Trọng âm &amp; Giảm âm (Аканье)</b></td><td><b>О</b> không có trọng âm đọc thành <b>А</b>; <b>Е / Я</b> không trọng âm đọc nhẹ thành <b>И</b>.</td><td><b>молоко́</b> → ma-la-kô · <b>хорошо́</b> → kha-ra-shô · <b>тетра́дь</b> → chi-trát</td></tr>
+            <tr><td><b>2. Vô thanh hóa phụ âm cuối</b></td><td>Phụ âm hữu thanh đứng cuối từ bị đọc thành âm vô thanh: <b>б→п, в→ф, г→к, д→т, ж→ш, з→с</b>.</td><td><b>друг</b> → đrúc · <b>год</b> → gôt · <b>хлеб</b> → khơ-lếp · <b>глаз</b> → gơ-láx</td></tr>
+            <tr><td><b>3. Cặp hay nhầm: Ш vs Щ · И vs Ы · Р</b></td><td><b>Ш</b> uốn lưỡi cứng, <b>Щ</b> mềm và kéo dài; <b>И</b> cười dẹt, <b>Ы</b> kéo lưỡi lùi về sau; <b>Р</b> rung đầu lưỡi.</td><td><b>шко́ла</b> (cứng) vs <b>общежи́тие</b> (mềm) · <b>мир</b> vs <b>мы</b></td></tr>
+            <tr><td><b>4. Dấu mềm (Ь) &amp; Dấu cứng (Ъ)</b></td><td><b>Ь</b> không tự phát âm nhưng làm mềm phụ âm đứng trước; <b>Ъ</b> tách phụ âm với nguyên âm sau (о/е/я/ю).</td><td><b>мать</b> (t' mềm) · <b>объявле́ние</b> (đọc tách ob-yav-lê-ni-yê)</td></tr>
+        </tbody>
+    </table>
 </div>
 
 <div class="clean-card">
-    <div class="clean-label"><span>Phần C · Mẹo nhận diện Giống của Danh từ trong 10 giây</span><span class="label-badge">Род существительных</span></div>
-    <div class="table-wrap">
-        <table class="clean-table">
-            <thead><tr><th>Giống</th><th>Đuôi từ thường gặp</th><th>Ví dụ chuẩn</th><th>Ngoại lệ hay gặp ở Podfak</th></tr></thead>
-            <tbody>
-                <tr><td><b>Giống đực (Мужской род · он)</b></td><td>Phụ âm cứng, <b>-й</b></td><td>стол, музе́й, па́спорт, слова́рь</td><td><b>па́па</b> (bố), <b>де́душка</b> (ông), <b>мужчи́на</b> (đàn ông), <b>ко́фе</b> (cà phê)</td></tr>
-                <tr><td><b>Giống cái (Женский род · она́)</b></td><td><b>-а, -я, -ия</b></td><td>кни́га, ко́мната, аудито́рия, семья́</td><td>Phần lớn danh từ đuôi <b>-ь</b> chỉ khái niệm trừu tượng/tập hợp: <b>тетра́дь, но́чь, пло́щадь</b></td></tr>
-                <tr><td><b>Giống trung (Средний род · оно́)</b></td><td><b>-о, -е, -ие</b></td><td>окно́, мо́ре, общежи́тие, зда́ние</td><td>10 danh từ đuôi <b>-мя</b>: <b>вре́мя</b> (thời gian), <b>и́мя</b> (tên)</td></tr>
-            </tbody>
-        </table>
-    </div>
+    <div class="clean-label"><span>Phần C · Mẹo nhận diện Giống của Danh từ trong 10 giây</span><span>Род существительных</span></div>
+    <table class="clean-table">
+        <thead><tr><th>Giống</th><th>Đuôi từ thường gặp</th><th>Ví dụ chuẩn</th><th>Ngoại lệ hay gặp ở Podfak</th></tr></thead>
+        <tbody>
+            <tr><td><b>Giống đực (Мужской род · он)</b></td><td>Phụ âm cứng, <b>-й</b></td><td>стол, музе́й, па́спорт, слова́рь</td><td><b>па́па</b> (bố), <b>де́душка</b> (ông), <b>мужчи́на</b> (đàn ông), <b>ко́фе</b> (cà phê)</td></tr>
+            <tr><td><b>Giống cái (Женский род · она́)</b></td><td><b>-а, -я, -ия</b></td><td>кни́га, ко́мната, аудито́рия, семья́</td><td>Phần lớn danh từ đuôi <b>-ь</b> chỉ khái niệm trừu tượng/tập hợp: <b>тетра́дь, но́чь, пло́щадь</b></td></tr>
+            <tr><td><b>Giống trung (Средний род · оно́)</b></td><td><b>-о, -е, -ие</b></td><td>окно́, мо́ре, общежи́тие, зда́ние</td><td>10 danh từ đuôi <b>-мя</b>: <b>вре́мя</b> (thời gian), <b>и́мя</b> (tên)</td></tr>
+        </tbody>
+    </table>
     <div class="note-callout">
         <b>Mẹo nhớ nhanh đuôi -ь:</b> Danh từ chỉ tháng (янва́рь, февра́ль...) và nghề nghiệp/người (преподава́тель, слова́рь) thường là <b>Giống đực</b>; danh từ chỉ vật dụng/khái niệm như <b>тетра́дь, дверь, крова́ть, ночь</b> là <b>Giống cái</b>.
     </div>
@@ -639,37 +630,33 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
 """,
     '1. 6 Cách · Danh từ': """
             <div class="clean-card">
-                <div class="clean-label"><span>Tổng quan 6 cách trong tiếng Nga (Падежи)</span><span class="label-badge">Nền tảng cốt lõi</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Cách</th><th>Câu hỏi</th><th>Chức năng chính</th><th>Giới từ hay gặp</th><th>Ví dụ</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>1. Именительный</b><br/>Nguyên cách</td><td>Кто? Что?</td><td>Chủ ngữ, định nghĩa, dạng gốc trong từ điển</td><td>Không có</td><td><b>Студе́нт</b> у́чится. <b>Кни́га</b> на столе́.</td></tr>
-                            <tr><td><b>2. Родительный</b><br/>Sở hữu cách</td><td>Кого́? Чего́?</td><td>Sở hữu (của ai), phủ định (нет), số lượng (2–4 số ít; ≥5 số nhiều), xuất phát</td><td>у, без, до, из, с, от, о́коло, по́сле, для, кро́ме</td><td>Нет <b>вре́мени</b>. Два <b>студе́нта</b>. Из <b>Росси́и</b>.</td></tr>
-                            <tr><td><b>3. Дательный</b><br/>Tặng cách</td><td>Кому́? Чему́?</td><td>Người nhận (cho ai), tuổi tác, trạng thái/cảm xúc (мне ну́жно), đối tượng hướng tới</td><td>к, по, благодаря́, вопреки́</td><td>Помога́ю <b>дру́гу</b>. <b>Мне</b> 21 год. По <b>пла́ну</b>.</td></tr>
-                            <tr><td><b>4. Винительный</b><br/>Đối cách</td><td>Кого́? Что?</td><td>Tân ngữ trực tiếp (đọc gì, gặp ai), hướng chuyển động (куда́?), thứ trong tuần</td><td>в, на (hướng đi), че́рез, за, про</td><td>Чита́ю <b>кни́гу</b>. Иду́ в <b>университе́т</b>. В <b>сре́ду</b>.</td></tr>
-                            <tr><td><b>5. Творительный</b><br/>Công cụ cách</td><td>Кем? Чем?</td><td>Công cụ (bằng gì), đi cùng ai (с кем?), nghề nghiệp (стать/рабо́тать), bị động</td><td>с, над, под, пе́ред, за, ме́жду</td><td>Пишу́ <b>ру́чкой</b>. Ко́фе с <b>молоко́м</b>. Ста́ну <b>инжене́ром</b>.</td></tr>
-                            <tr><td><b>6. Предложный</b><br/>Giới cách</td><td>О ком? О чём? Где?</td><td>Vị trí tĩnh (ở đâu?), chủ đề (nói/nghĩ về gì), tháng/năm, phương tiện (на метро́)</td><td>в, на (vị trí), о (об), при</td><td>Живу́ в <b>Петербу́рге</b>. Ду́маю об <b>экза́мене</b>.</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <div class="clean-label"><span>Tổng quan 6 cách trong tiếng Nga (Падежи)</span><span>Nền tảng cốt lõi</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách</th><th>Câu hỏi</th><th>Chức năng chính</th><th>Giới từ hay gặp</th><th>Ví dụ</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1. Именительный</b><br/>Nguyên cách</td><td>Кто? Что?</td><td>Chủ ngữ, định nghĩa, dạng gốc trong từ điển</td><td>Không có</td><td><b>Студе́нт</b> у́чится. <b>Кни́га</b> на столе́.</td></tr>
+                        <tr><td><b>2. Родительный</b><br/>Sở hữu cách</td><td>Кого́? Чего́?</td><td>Sở hữu (của ai), phủ định (нет), số lượng (2–4 số ít; ≥5 số nhiều), xuất phát</td><td>у, без, до, из, с, от, о́коло, по́сле, для, кро́ме</td><td>Нет <b>вре́мени</b>. Два <b>студе́нта</b>. Из <b>Росси́и</b>.</td></tr>
+                        <tr><td><b>3. Дательный</b><br/>Tặng cách</td><td>Кому́? Чему́?</td><td>Người nhận (cho ai), tuổi tác, trạng thái/cảm xúc (мне ну́жно), đối tượng hướng tới</td><td>к, по, благодаря́, вопреки́</td><td>Помога́ю <b>дру́гу</b>. <b>Мне</b> 21 год. По <b>пла́ну</b>.</td></tr>
+                        <tr><td><b>4. Винительный</b><br/>Đối cách</td><td>Кого́? Что?</td><td>Tân ngữ trực tiếp (đọc gì, gặp ai), hướng chuyển động (куда́?), thứ trong tuần</td><td>в, на (hướng đi), че́рез, за, про</td><td>Чита́ю <b>кни́гу</b>. Иду́ в <b>университе́т</b>. В <b>сре́ду</b>.</td></tr>
+                        <tr><td><b>5. Творительный</b><br/>Công cụ cách</td><td>Кем? Чем?</td><td>Công cụ (bằng gì), đi cùng ai (с кем?), nghề nghiệp (стать/рабо́тать), bị động</td><td>с, над, под, пе́ред, за, ме́жду</td><td>Пишу́ <b>ру́чкой</b>. Ко́фе с <b>молоко́м</b>. Ста́ну <b>инжене́ром</b>.</td></tr>
+                        <tr><td><b>6. Предложный</b><br/>Giới cách</td><td>О ком? О чём? Где?</td><td>Vị trí tĩnh (ở đâu?), chủ đề (nói/nghĩ về gì), tháng/năm, phương tiện (на метро́)</td><td>в, на (vị trí), о (об), при</td><td>Живу́ в <b>Петербу́рге</b>. Ду́маю об <b>экза́мене</b>.</td></tr>
+                    </tbody>
+                </table>
             </div>
 
             <div class="clean-card">
                 <div class="clean-label"><span>Bảng đuôi Danh từ Số ít &amp; Số nhiều</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Cách</th><th>Đực (ø/-й/-ь)</th><th>Cái (-а/-я/-ь)</th><th>Trung (-о/-е/-ие)</th><th>Số nhiều (Мн. ч.)</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>1</b></td><td>ø / -й / -ь</td><td>-а / -я / -ь</td><td>-о / -е / -ие</td><td>-ы / -и · -а / -я</td></tr>
-                            <tr><td><b>2</b></td><td>-а / -я / -я</td><td>-ы(-и) / -и / -и</td><td>-а / -я / -ия</td><td><b>-ов/-ев · -ей · ø · -ий</b></td></tr>
-                            <tr><td><b>3</b></td><td>-у / -ю / -ю</td><td>-е (-и) / -и</td><td>-у / -ю / -ию</td><td>-ам / -ям</td></tr>
-                            <tr><td><b>4</b></td><td>Vật=C1 · Người=C2</td><td>-у / -ю / -ь</td><td>Giống C1</td><td>Vật=C1 · Người=C2</td></tr>
-                            <tr><td><b>5</b></td><td>-ом / -ем / -ем</td><td>-ой / -ей / -ью</td><td>-ом / -ем / -ием</td><td>-ами / -ями</td></tr>
-                            <tr><td><b>6</b></td><td>-е (-ии)</td><td>-е (-ии/-и)</td><td>-е (-ии)</td><td>-ах / -ях</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách</th><th>Đực (ø/-й/-ь)</th><th>Cái (-а/-я/-ь)</th><th>Trung (-о/-е/-ие)</th><th>Số nhiều (Мн. ч.)</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1</b></td><td>ø / -й / -ь</td><td>-а / -я / -ь</td><td>-о / -е / -ие</td><td>-ы / -и · -а / -я</td></tr>
+                        <tr><td><b>2</b></td><td>-а / -я / -я</td><td>-ы(-и) / -и / -и</td><td>-а / -я / -ия</td><td><b>-ов/-ев · -ей · ø · -ий</b></td></tr>
+                        <tr><td><b>3</b></td><td>-у / -ю / -ю</td><td>-е (-и) / -и</td><td>-у / -ю / -ию</td><td>-ам / -ям</td></tr>
+                        <tr><td><b>4</b></td><td>Vật=C1 · Người=C2</td><td>-у / -ю / -ь</td><td>Giống C1</td><td>Vật=C1 · Người=C2</td></tr>
+                        <tr><td><b>5</b></td><td>-ом / -ем / -ем</td><td>-ой / -ей / -ью</td><td>-ом / -ем / -ием</td><td>-ами / -ями</td></tr>
+                        <tr><td><b>6</b></td><td>-е (-ии)</td><td>-е (-ии/-и)</td><td>-е (-ии)</td><td>-ах / -ях</td></tr>
+                    </tbody>
+                </table>
                 <div class="note-callout">
                     <b>Quy tắc 7 chữ cái (г, к, х, ж, ч, ш, щ):</b> Không bao giờ viết «ы», luôn đổi thành «и» (кни́га → кни́ги).<br/>
                     <b>Quy tắc 5 chữ cái (ж, ч, ш, щ, ц):</b> Không có trọng âm thì viết «е» thay cho «о» (това́рищем, хоро́шего).
@@ -677,20 +664,18 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
             </div>
 
             <div class="clean-card">
-                <div class="clean-label"><span>Danh từ biến đổi số nhiều đặc biệt (Cách 1 &amp; Cách 2)</span><span class="label-badge">Hay thi nhất</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Cách 1 số ít</th><th>Cách 1 số nhiều</th><th>Cách 2 số nhiều</th><th>Nghĩa</th></tr></thead>
-                        <tbody>
-                            <tr><td>брат / сестра́</td><td>бра́тья / сёстры</td><td><b>бра́тьев / сестёр</b></td><td>anh em trai / chị em gái</td></tr>
-                            <tr><td>друг / челове́к</td><td>друзья́ / лю́ди</td><td><b>друзе́й / люде́й</b></td><td>bạn bè / con người</td></tr>
-                            <tr><td>ребёнок / сын</td><td>де́ти / сыновья́</td><td><b>дете́й / сынове́й</b></td><td>trẻ em / con trai</td></tr>
-                            <tr><td>мать / дочь</td><td>ма́тери / до́чери</td><td><b>матере́й / дочере́й</b></td><td>mẹ / con gái</td></tr>
-                            <tr><td>стул / лист / де́рево</td><td>сту́лья / ли́стья / дере́вья</td><td><b>сту́льев / ли́стьев / дере́вьев</b></td><td>ghế / lá / cây</td></tr>
-                            <tr><td>письмо́ / окно́</td><td>пи́сьма / о́кна</td><td><b>пи́сем / о́кон</b></td><td>bức thư / cửa sổ</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <div class="clean-label"><span>Danh từ biến đổi số nhiều đặc biệt (Cách 1 &amp; Cách 2)</span><span>Hay thi nhất</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách 1 số ít</th><th>Cách 1 số nhiều</th><th>Cách 2 số nhiều</th><th>Nghĩa</th></tr></thead>
+                    <tbody>
+                        <tr><td>брат / сестра́</td><td>бра́тья / сёстры</td><td><b>бра́тьев / сестёр</b></td><td>anh em trai / chị em gái</td></tr>
+                        <tr><td>друг / челове́к</td><td>друзья́ / лю́ди</td><td><b>друзе́й / люде́й</b></td><td>bạn bè / con người</td></tr>
+                        <tr><td>ребёнок / сын</td><td>де́ти / сыновья́</td><td><b>дете́й / сынове́й</b></td><td>trẻ em / con trai</td></tr>
+                        <tr><td>мать / дочь</td><td>ма́тери / до́чери</td><td><b>матере́й / дочере́й</b></td><td>mẹ / con gái</td></tr>
+                        <tr><td>стул / лист / де́рево</td><td>сту́лья / ли́стья / дере́вья</td><td><b>сту́льев / ли́стьев / дере́вьев</b></td><td>ghế / lá / cây</td></tr>
+                        <tr><td>письмо́ / окно́</td><td>пи́сьма / о́кна</td><td><b>пи́сем / о́кон</b></td><td>bức thư / cửa sổ</td></tr>
+                    </tbody>
+                </table>
                 <div class="note-callout">
                     <b>Cấu trúc Có / Không có ở 3 thì:</b><br/>
                     • <b>Có:</b> У кого́ (C2) + <b>был(а/о/и) / есть / бу́дет</b> + C1 (<i>У меня́ есть слова́рь</i>).<br/>
@@ -703,53 +688,47 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
     '2. Tính từ & Đại từ': """
             <div class="clean-card">
                 <div class="clean-label"><span>Biến cách Tính từ theo 6 cách</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Cách</th><th>Giống đực</th><th>Giống trung</th><th>Giống cái</th><th>Số nhiều</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>1</b></td><td>-ый / -ой / -ий</td><td>-ое / -ее</td><td>-ая / -яя</td><td>-ые / -ие</td></tr>
-                            <tr><td><b>2</b></td><td>-ого / -его</td><td>-ого / -его</td><td>-ой / -ей</td><td>-ых / -их</td></tr>
-                            <tr><td><b>3</b></td><td>-ому / -ему</td><td>-ому / -ему</td><td>-ой / -ей</td><td>-ым / -им</td></tr>
-                            <tr><td><b>4</b></td><td>Vật=C1 · Người=C2</td><td>-ое / -ее</td><td>-ую / -юю</td><td>Vật=C1 · Người=C2</td></tr>
-                            <tr><td><b>5</b></td><td>-ым / -им</td><td>-ым / -им</td><td>-ой / -ей</td><td>-ыми / -ими</td></tr>
-                            <tr><td><b>6</b></td><td>-ом / -ем</td><td>-ом / -ем</td><td>-ой / -ей</td><td>-ых / -их</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách</th><th>Giống đực</th><th>Giống trung</th><th>Giống cái</th><th>Số nhiều</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1</b></td><td>-ый / -ой / -ий</td><td>-ое / -ее</td><td>-ая / -яя</td><td>-ые / -ие</td></tr>
+                        <tr><td><b>2</b></td><td>-ого / -его</td><td>-ого / -его</td><td>-ой / -ей</td><td>-ых / -их</td></tr>
+                        <tr><td><b>3</b></td><td>-ому / -ему</td><td>-ому / -ему</td><td>-ой / -ей</td><td>-ым / -им</td></tr>
+                        <tr><td><b>4</b></td><td>Vật=C1 · Người=C2</td><td>-ое / -ее</td><td>-ую / -юю</td><td>Vật=C1 · Người=C2</td></tr>
+                        <tr><td><b>5</b></td><td>-ым / -им</td><td>-ым / -им</td><td>-ой / -ей</td><td>-ыми / -ими</td></tr>
+                        <tr><td><b>6</b></td><td>-ом / -ем</td><td>-ом / -ем</td><td>-ой / -ей</td><td>-ых / -их</td></tr>
+                    </tbody>
+                </table>
             </div>
 
             <div class="clean-card">
                 <div class="clean-label"><span>6 Cách của Đại từ nhân xưng</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Cách</th><th>я</th><th>ты</th><th>он / оно́</th><th>она́</th><th>мы</th><th>вы</th><th>они́</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>1</b></td><td>я</td><td>ты</td><td>он / оно́</td><td>она́</td><td>мы</td><td>вы</td><td>они́</td></tr>
-                            <tr><td><b>2</b></td><td>меня́</td><td>тебя́</td><td>его́ (него́)</td><td>её (неё)</td><td>нас</td><td>вас</td><td>их (них)</td></tr>
-                            <tr><td><b>3</b></td><td>мне</td><td>тебе́</td><td>ему́ (нему́)</td><td>ей (ней)</td><td>нам</td><td>вам</td><td>им (ним)</td></tr>
-                            <tr><td><b>4</b></td><td>меня́</td><td>тебя́</td><td>его́ (него́)</td><td>её (неё)</td><td>нас</td><td>вас</td><td>их (них)</td></tr>
-                            <tr><td><b>5</b></td><td>мной</td><td>тобо́й</td><td>им (ним)</td><td>ей (ней)</td><td>на́ми</td><td>ва́ми</td><td>и́ми (ни́ми)</td></tr>
-                            <tr><td><b>6</b></td><td>обо мне</td><td>о тебе́</td><td>о нём</td><td>о ней</td><td>о нас</td><td>о вас</td><td>о них</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách</th><th>я</th><th>ты</th><th>он / оно́</th><th>она́</th><th>мы</th><th>вы</th><th>они́</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1</b></td><td>я</td><td>ты</td><td>он / оно́</td><td>она́</td><td>мы</td><td>вы</td><td>они́</td></tr>
+                        <tr><td><b>2</b></td><td>меня́</td><td>тебя́</td><td>его́ (него́)</td><td>её (неё)</td><td>нас</td><td>вас</td><td>их (них)</td></tr>
+                        <tr><td><b>3</b></td><td>мне</td><td>тебе́</td><td>ему́ (нему́)</td><td>ей (ней)</td><td>нам</td><td>вам</td><td>им (ним)</td></tr>
+                        <tr><td><b>4</b></td><td>меня́</td><td>тебя́</td><td>его́ (него́)</td><td>её (неё)</td><td>нас</td><td>вас</td><td>их (них)</td></tr>
+                        <tr><td><b>5</b></td><td>мной</td><td>тобо́й</td><td>им (ним)</td><td>ей (ней)</td><td>на́ми</td><td>ва́ми</td><td>и́ми (ни́ми)</td></tr>
+                        <tr><td><b>6</b></td><td>обо мне</td><td>о тебе́</td><td>о нём</td><td>о ней</td><td>о нас</td><td>о вас</td><td>о них</td></tr>
+                    </tbody>
+                </table>
             </div>
 
             <div class="clean-card">
                 <div class="clean-label"><span>Đại từ sở hữu (мой, твой, наш, ваш, свой) &amp; Chỉ định (э́тот)</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Cách</th><th>Đực / Trung (мой · э́тот)</th><th>Cái (моя́ · э́та)</th><th>Số nhiều (мои́ · э́ти)</th><th>Lưu ý</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>1</b></td><td>мой / моё · э́тот / э́то</td><td>моя́ · э́та</td><td>мои́ · э́ти</td><td><b>его́, её, их</b> không đổi ở cả 6 cách</td></tr>
-                            <tr><td><b>2</b></td><td>моего́ · э́того</td><td>мое́й · э́той</td><td>мои́х · э́тих</td><td><b>наш/ваш:</b> на́шего, на́шей, на́ших</td></tr>
-                            <tr><td><b>3</b></td><td>моему́ · э́тому</td><td>мое́й · э́той</td><td>мои́м · э́тим</td><td><b>свой</b> chia hệt như <b>мой</b></td></tr>
-                            <tr><td><b>4</b></td><td>Vật=C1 · Người=C2</td><td>мою́ · э́ту</td><td>Vật=C1 · Người=C2</td><td><i>Я чита́ю э́ту кни́гу / вижу э́того дру́га</i></td></tr>
-                            <tr><td><b>5</b></td><td>мои́м · э́тим</td><td>мое́й · э́той</td><td>мои́ми · э́тими</td><td><i>с мои́м дру́гом · с э́той гру́ппой</i></td></tr>
-                            <tr><td><b>6</b></td><td>моём · э́том</td><td>мое́й · э́той</td><td>мои́х · э́тих</td><td><i>в на́шем университе́те · об э́том</i></td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Cách</th><th>Đực / Trung (мой · э́тот)</th><th>Cái (моя́ · э́та)</th><th>Số nhiều (мои́ · э́ти)</th><th>Lưu ý</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1</b></td><td>мой / моё · э́тот / э́то</td><td>моя́ · э́та</td><td>мои́ · э́ти</td><td><b>его́, её, их</b> không đổi ở cả 6 cách</td></tr>
+                        <tr><td><b>2</b></td><td>моего́ · э́того</td><td>мое́й · э́той</td><td>мои́х · э́тих</td><td><b>наш/ваш:</b> на́шего, на́шей, на́ших</td></tr>
+                        <tr><td><b>3</b></td><td>моему́ · э́тому</td><td>мое́й · э́той</td><td>мои́м · э́тим</td><td><b>свой</b> chia hệt như <b>мой</b></td></tr>
+                        <tr><td><b>4</b></td><td>Vật=C1 · Người=C2</td><td>мою́ · э́ту</td><td>Vật=C1 · Người=C2</td><td><i>Я чита́ю э́ту кни́гу / вижу э́того дру́га</i></td></tr>
+                        <tr><td><b>5</b></td><td>мои́м · э́тим</td><td>мое́й · э́той</td><td>мои́ми · э́тими</td><td><i>с мои́м дру́гом · с э́той гру́ппой</i></td></tr>
+                        <tr><td><b>6</b></td><td>моём · э́том</td><td>мое́й · э́той</td><td>мои́х · э́тих</td><td><i>в на́шем университе́те · об э́том</i></td></tr>
+                    </tbody>
+                </table>
                 <div class="note-callout">
                     <b>Quy tắc thêm «н-» sau giới từ:</b> Khi ngôi thứ 3 (<i>он, она́, оно́, они́</i>) đứng ngay sau giới từ ở các cách 2–6, bắt buộc thêm <b>н-</b>: <i>у <b>него́</b>, к <b>ней</b>, с <b>ни́ми</b>, о <b>нём</b></i> (nhưng khi là sở hữu thì KHÔNG thêm: <i>у его́ дру́га</i>).
                 </div>
@@ -759,19 +738,17 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
     '3. Động từ & Thể (НСВ/СВ)': """
             <div class="clean-card">
                 <div class="clean-label"><span>Chia động từ Nhóm I &amp; Nhóm II · Biến âm · Thể НСВ / СВ</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Ngôi</th><th>Nhóm I (-ать, -ять, -еть · чита́ть)</th><th>Nhóm II (-ить · говори́ть)</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>я</b></td><td>-у / -ю (чита́ю)</td><td>-у / -ю (говорю́)</td></tr>
-                            <tr><td><b>ты</b></td><td>-ешь / -ёшь (чита́ешь)</td><td>-ишь (говори́шь)</td></tr>
-                            <tr><td><b>он / она́ / оно́</b></td><td>-ет / -ёт (чита́ет)</td><td>-ит (говори́т)</td></tr>
-                            <tr><td><b>мы</b></td><td>-ем / -ём (чита́ем)</td><td>-им (говори́м)</td></tr>
-                            <tr><td><b>вы</b></td><td>-ете / -ёте (чита́ете)</td><td>-ите (говори́те)</td></tr>
-                            <tr><td><b>они́</b></td><td>-ут / -ют (чита́ют)</td><td>-ат / -ят (говоря́т)</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Ngôi</th><th>Nhóm I (-ать, -ять, -еть · чита́ть)</th><th>Nhóm II (-ить · говори́ть)</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>я</b></td><td>-у / -ю (чита́ю)</td><td>-у / -ю (говорю́)</td></tr>
+                        <tr><td><b>ты</b></td><td>-ешь / -ёшь (чита́ешь)</td><td>-ишь (говори́шь)</td></tr>
+                        <tr><td><b>он / она́ / оно́</b></td><td>-ет / -ёт (чита́ет)</td><td>-ит (говори́т)</td></tr>
+                        <tr><td><b>мы</b></td><td>-ем / -ём (чита́ем)</td><td>-им (говори́м)</td></tr>
+                        <tr><td><b>вы</b></td><td>-ете / -ёте (чита́ете)</td><td>-ите (говори́те)</td></tr>
+                        <tr><td><b>они́</b></td><td>-ут / -ют (чита́ют)</td><td>-ат / -ят (говоря́т)</td></tr>
+                    </tbody>
+                </table>
                 <div class="note-callout">
                     <b>Biến âm ở ngôi «я»:</b> д→ж (ви́жу), т→ч (плачу́), с→ш (пишу́), б/п/в/м→бл/пл/вл/мл (люблю́, гото́влю).<br/>
                     <b>НСВ</b> = quá trình, lặp lại (ка́ждый день, до́лго) · <b>СВ</b> = kết quả dứt điểm 1 lần (уже́, наконе́ц; không có thì hiện tại).
@@ -779,17 +756,15 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
             </div>
 
             <div class="clean-card">
-                <div class="clean-label"><span>So sánh 3 Thì của Thể Chưa hoàn thành (НСВ) &amp; Hoàn thành (СВ)</span><span class="label-badge">Cốt lõi động từ</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Thì</th><th>Thể НСВ (Quá trình · Lặp lại · Không nhấn kết quả)</th><th>Thể СВ (1 lần · Dứt điểm · Có kết quả)</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>Quá khứ</b></td><td>чита́л(а/и) — <i>Вчера́ я до́лго чита́л текст.</i></td><td>прочита́л(а/и) — <i>Я уже́ прочита́л весь текст.</i></td></tr>
-                            <tr><td><b>Hiện tại</b></td><td>чита́ю, чита́ешь... — <i>Я сейча́с чита́ю.</i></td><td><b>KHÔNG CÓ thì hiện tại!</b></td></tr>
-                            <tr><td><b>Tương lai</b></td><td><b>бу́ду + nguyên thể НСВ</b> — <i>За́втра я бу́ду чита́ть рома́н.</i></td><td><b>Chia trực tiếp СВ</b> — <i>За́втра я прочита́ю рома́н.</i></td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <div class="clean-label"><span>So sánh 3 Thì của Thể Chưa hoàn thành (НСВ) &amp; Hoàn thành (СВ)</span><span>Cốt lõi động từ</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Thì</th><th>Thể НСВ (Quá trình · Lặp lại · Không nhấn kết quả)</th><th>Thể СВ (1 lần · Dứt điểm · Có kết quả)</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>Quá khứ</b></td><td>чита́л(а/и) — <i>Вчера́ я до́лго чита́л текст.</i></td><td>прочита́л(а/и) — <i>Я уже́ прочита́л весь текст.</i></td></tr>
+                        <tr><td><b>Hiện tại</b></td><td>чита́ю, чита́ешь... — <i>Я сейча́с чита́ю.</i></td><td><b>KHÔNG CÓ thì hiện tại!</b></td></tr>
+                        <tr><td><b>Tương lai</b></td><td><b>бу́ду + nguyên thể НСВ</b> — <i>За́втра я бу́ду чита́ть рома́н.</i></td><td><b>Chia trực tiếp СВ</b> — <i>За́втра я прочита́ю рома́н.</i></td></tr>
+                    </tbody>
+                </table>
                 <div class="note-callout">
                     <b>Cấu trúc rủ rê (Thức mệnh lệnh ngôi 1):</b> <b>Дава́й / Дава́йте + ngôi «мы» của động từ СВ</b>!<br/>
                     VD: <i>Дава́й пойдём в кино́!</i> (Chúng mình đi xem phim nhé!) · <i>Дава́йте споём пе́сню!</i> · <i>Дава́й пообе́даем вме́сте!</i><br/>
@@ -798,59 +773,53 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
             </div>
 
             <div class="clean-card">
-                <div class="clean-label"><span>Bảng tổng hợp Cặp động từ НСВ — СВ hay dùng nhất theo Cách chi phối</span><span class="label-badge">Ưu tiên ôn thi</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Nhóm Cách chi phối</th><th>Các cặp động từ НСВ — СВ thiết yếu</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>+ Cách 4</b><br/>(Кого́? Что?)</td><td>
-                                <b>ви́деть — уви́деть</b> (thấy) · <b>писа́ть — написа́ть</b> (viết) · <b>чита́ть — прочита́ть</b> (đọc) · <b>повторя́ть — повтори́ть</b> (nhắc lại) · <b>изуча́ть — изучи́ть</b> (nghiên cứu) · <b>понима́ть — поня́ть</b> (hiểu) · <b>покупа́ть — купи́ть</b> (mua) · <b>гото́вить — пригото́вить</b> (nấu/chuẩn bị) · <b>де́лать — сде́лать</b> (làm) · <b>вспомина́ть — вспо́мнить</b> (nhớ lại) · <b>встреча́ть — встре́тить</b> (gặp/đón) · <b>поздравля́ть — поздра́вить</b> (chúc mừng) · <b>открыва́ть — откры́ть</b> (mở) · <b>закрыва́ть — закры́ть</b> (đóng) · <b>получа́ть — получи́ть</b> (nhận) · <b>приглаша́ть — пригласи́ть</b> (mời) · <b>исправля́ть — испра́вить</b> (sửa lỗi) · <b>проси́ть — попроси́ть</b> (nhờ) · <b>спра́шивать — спроси́ть</b> (hỏi) · <b>реша́ть — реши́ть</b> (giải/quyết định) · <b>слу́шать — послу́шать</b> (nghe) · <b>смотре́ть — посмотре́ть</b> (xem) · <b>учи́ть — вы́учить</b> (học thuộc) · <b>петь — спеть</b> (hát) · <b>благодари́ть — поблагодари́ть</b> (cảm ơn)
-                            </td></tr>
-                            <tr><td><b>+ Cách 3</b><br/>(Кому́? + C4 / о C6 / инф.)</td><td>
-                                <b>звони́ть — позвони́ть</b> (gọi) · <b>говори́ть — сказа́ть</b> (nói) · <b>сообща́ть — сообщи́ть</b> (báo tin) · <b>расска́зывать — рассказа́ть</b> (kể) · <b>пока́зывать — показа́ть</b> (cho xem) · <b>дава́ть — дать</b> (cho) · <b>дари́ть — подари́ть</b> (tặng) · <b>объясня́ть — объясни́ть</b> (giải thích) · <b>передава́ть — переда́ть</b> (chuyển) · <b>посыла́ть — посла́ть</b> (gửi đi) · <b>присыла́ть — присла́ть</b> (gửi đến) · <b>помога́ть — помо́чь</b> (giúp) · <b>сове́товать — посове́товать</b> (khuyên) · <b>разреша́ть — разреши́ть</b> (cho phép) · <b>обеща́ть — пообеща́ть</b> (hứa) · <b>меша́ть — помеша́ть</b> (làm phiền) · <b>нра́виться — понра́виться</b> (thích)
-                            </td></tr>
-                            <tr><td><b>+ Cách 5</b><br/>(с кем? / кем? чем?)</td><td>
-                                <b>догова́риваться — договори́ться</b> (thỏa thuận) · <b>встреча́ться — встре́титься</b> (gặp nhau) · <b>знако́миться — познако́миться</b> (làm quen) · <b>сове́товаться — посове́товаться</b> (bàn bạc) · <b>спо́рить — поспо́рить</b> (tranh luận) · <b>ссо́риться — поссо́риться</b> (cãi nhau) · <b>мири́ться — помири́ться</b> (làm hòa) · <b>занима́ться — заня́ться</b> (học/tập) · <b>станови́ться — стать</b> (trở thành) · <b>интересова́ться — заинтересова́ться</b> (quan tâm) · <b>владе́ть</b> (nắm vững) · <b>управля́ть</b> (điều khiển)
-                            </td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <div class="clean-label"><span>Bảng tổng hợp Cặp động từ НСВ — СВ hay dùng nhất theo Cách chi phối</span><span>Ưu tiên ôn thi</span></div>
+                <table class="clean-table">
+                    <thead><tr><th>Nhóm Cách chi phối</th><th>Các cặp động từ НСВ — СВ thiết yếu</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>+ Cách 4</b><br/>(Кого́? Что?)</td><td>
+                            <b>ви́деть — уви́деть</b> (thấy) · <b>писа́ть — написа́ть</b> (viết) · <b>чита́ть — прочита́ть</b> (đọc) · <b>повторя́ть — повтори́ть</b> (nhắc lại) · <b>изуча́ть — изучи́ть</b> (nghiên cứu) · <b>понима́ть — поня́ть</b> (hiểu) · <b>покупа́ть — купи́ть</b> (mua) · <b>гото́вить — пригото́вить</b> (nấu/chuẩn bị) · <b>де́лать — сде́лать</b> (làm) · <b>вспомина́ть — вспо́мнить</b> (nhớ lại) · <b>встреча́ть — встре́тить</b> (gặp/đón) · <b>поздравля́ть — поздра́вить</b> (chúc mừng) · <b>открыва́ть — откры́ть</b> (mở) · <b>закрыва́ть — закры́ть</b> (đóng) · <b>получа́ть — получи́ть</b> (nhận) · <b>приглаша́ть — пригласи́ть</b> (mời) · <b>исправля́ть — испра́вить</b> (sửa lỗi) · <b>проси́ть — попроси́ть</b> (nhờ) · <b>спра́шивать — спроси́ть</b> (hỏi) · <b>реша́ть — реши́ть</b> (giải/quyết định) · <b>слу́шать — послу́шать</b> (nghe) · <b>смотре́ть — посмотре́ть</b> (xem) · <b>учи́ть — вы́учить</b> (học thuộc) · <b>петь — спеть</b> (hát) · <b>благодари́ть — поблагодари́ть</b> (cảm ơn)
+                        </td></tr>
+                        <tr><td><b>+ Cách 3</b><br/>(Кому́? + C4 / о C6 / инф.)</td><td>
+                            <b>звони́ть — позвони́ть</b> (gọi) · <b>говори́ть — сказа́ть</b> (nói) · <b>сообща́ть — сообщи́ть</b> (báo tin) · <b>расска́зывать — рассказа́ть</b> (kể) · <b>пока́зывать — показа́ть</b> (cho xem) · <b>дава́ть — дать</b> (cho) · <b>дари́ть — подари́ть</b> (tặng) · <b>объясня́ть — объясни́ть</b> (giải thích) · <b>передава́ть — переда́ть</b> (chuyển) · <b>посыла́ть — посла́ть</b> (gửi đi) · <b>присыла́ть — присла́ть</b> (gửi đến) · <b>помога́ть — помо́чь</b> (giúp) · <b>сове́товать — посове́товать</b> (khuyên) · <b>разреша́ть — разреши́ть</b> (cho phép) · <b>обеща́ть — пообеща́ть</b> (hứa) · <b>меша́ть — помеша́ть</b> (làm phiền) · <b>нра́виться — понра́виться</b> (thích)
+                        </td></tr>
+                        <tr><td><b>+ Cách 5</b><br/>(с кем? / кем? чем?)</td><td>
+                            <b>догова́риваться — договори́ться</b> (thỏa thuận) · <b>встреча́ться — встре́титься</b> (gặp nhau) · <b>знако́миться — познако́миться</b> (làm quen) · <b>сове́товаться — посове́товаться</b> (bàn bạc) · <b>спо́рить — поспо́рить</b> (tranh luận) · <b>ссо́риться — поссо́риться</b> (cãi nhau) · <b>мири́ться — помири́ться</b> (làm hòa) · <b>занима́ться — заня́ться</b> (học/tập) · <b>станови́ться — стать</b> (trở thành) · <b>интересова́ться — заинтересова́ться</b> (quan tâm) · <b>владе́ть</b> (nắm vững) · <b>управля́ть</b> (điều khiển)
+                        </td></tr>
+                    </tbody>
+                </table>
             </div>
             
 """,
     '4. Động từ chuyển động': """
             <div class="clean-card">
                 <div class="clean-label"><span>Động từ chuyển động (1 chiều vs Đa chiều) &amp; Tiền tố</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Nghĩa</th><th>1 hướng / Đang đi</th><th>Khứ hồi / Thói quen</th><th>Tiền tố hay gặp</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>Đi bộ</b></td><td>идти́ (иду́, идёшь)</td><td>ходи́ть (хожу́, хо́дишь)</td><td>при- (đến), у- (đi khỏi)</td></tr>
-                            <tr><td><b>Đi xe / tàu</b></td><td>е́хать (е́ду, е́дешь)</td><td>е́здить (е́зжу, е́здишь)</td><td>в-/во- (vào), вы- (ra)</td></tr>
-                            <tr><td><b>Mang (đi bộ)</b></td><td>нести́</td><td>носи́ть</td><td>под- (lại gần), от- (rời xa)</td></tr>
-                            <tr><td><b>Chở (xe)</b></td><td>везти́</td><td>вози́ть</td><td>пере- (sang ngang), за- (ghé qua)</td></tr>
-                            <tr><td><b>Bay</b></td><td>лете́ть</td><td>лета́ть</td><td>до- (tới đích), про- (đi qua)</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Nghĩa</th><th>1 hướng / Đang đi</th><th>Khứ hồi / Thói quen</th><th>Tiền tố hay gặp</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>Đi bộ</b></td><td>идти́ (иду́, идёшь)</td><td>ходи́ть (хожу́, хо́дишь)</td><td>при- (đến), у- (đi khỏi)</td></tr>
+                        <tr><td><b>Đi xe / tàu</b></td><td>е́хать (е́ду, е́дешь)</td><td>е́здить (е́зжу, е́здишь)</td><td>в-/во- (vào), вы- (ra)</td></tr>
+                        <tr><td><b>Mang (đi bộ)</b></td><td>нести́</td><td>носи́ть</td><td>под- (lại gần), от- (rời xa)</td></tr>
+                        <tr><td><b>Chở (xe)</b></td><td>везти́</td><td>вози́ть</td><td>пере- (sang ngang), за- (ghé qua)</td></tr>
+                        <tr><td><b>Bay</b></td><td>лете́ть</td><td>лета́ть</td><td>до- (tới đích), про- (đi qua)</td></tr>
+                    </tbody>
+                </table>
             </div>
 
             <div class="clean-card">
                 <div class="clean-label"><span>Đầy đủ 14 cặp Động từ chuyển động &amp; 14 Tiền tố đổi thể (НСВ ↔ СВ)</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Nghĩa</th><th>Nhóm 1 (1 hướng)</th><th>Nhóm 2 (Đa hướng)</th><th>Tiền tố thông dụng</th><th>Ý nghĩa tiền tố</th></tr></thead>
-                        <tbody>
-                            <tr><td>Đi bộ / Đi xe</td><td>идти́ / е́хать</td><td>ходи́ть / е́здить</td><td><b>по- / при- / у-</b></td><td>bắt đầu đi / đến nơi / rời đi</td></tr>
-                            <tr><td>Chạy / Bay</td><td>бежа́ть / лете́ть</td><td>бе́гать / лета́ть</td><td><b>в- (во-) / вы-</b></td><td>đi vào trong / đi ra ngoài</td></tr>
-                            <tr><td>Bơi, đi tàu / Leo</td><td>плыть / лезть</td><td>пла́вать / ла́зать</td><td><b>под- / от-</b></td><td>lại gần / lùi ra xa</td></tr>
-                            <tr><td>Bò / Lang thang</td><td>ползти́ / брести́</td><td>по́лзать / броди́ть</td><td><b>пере- / про-</b></td><td>băng qua / đi xuyên qua, đi lố</td></tr>
-                            <tr><td>Dẫn dắt / Chở xe</td><td>вести́ / везти́</td><td>води́ть / вози́ть</td><td><b>за- / до-</b></td><td>ghé qua / đi tới tận đích</td></tr>
-                            <tr><td>Mang tay / Xách</td><td>нести́ / тащи́ть</td><td>носи́ть / таска́ть</td><td><b>об- (обо-) / с-</b></td><td>đi vòng quanh / đi xuống, tụ họp</td></tr>
-                            <tr><td>Đuổi theo / Lăn</td><td>гнать / кати́ть</td><td>гоня́ть / ката́ть</td><td><b>раз- (рас-) / на-</b></td><td>tản ra nhiều hướng / va chạm</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Nghĩa</th><th>Nhóm 1 (1 hướng)</th><th>Nhóm 2 (Đa hướng)</th><th>Tiền tố thông dụng</th><th>Ý nghĩa tiền tố</th></tr></thead>
+                    <tbody>
+                        <tr><td>Đi bộ / Đi xe</td><td>идти́ / е́хать</td><td>ходи́ть / е́здить</td><td><b>по- / при- / у-</b></td><td>bắt đầu đi / đến nơi / rời đi</td></tr>
+                        <tr><td>Chạy / Bay</td><td>бежа́ть / лете́ть</td><td>бе́гать / лета́ть</td><td><b>в- (во-) / вы-</b></td><td>đi vào trong / đi ra ngoài</td></tr>
+                        <tr><td>Bơi, đi tàu / Leo</td><td>плыть / лезть</td><td>пла́вать / ла́зать</td><td><b>под- / от-</b></td><td>lại gần / lùi ra xa</td></tr>
+                        <tr><td>Bò / Lang thang</td><td>ползти́ / брести́</td><td>по́лзать / броди́ть</td><td><b>пере- / про-</b></td><td>băng qua / đi xuyên qua, đi lố</td></tr>
+                        <tr><td>Dẫn dắt / Chở xe</td><td>вести́ / везти́</td><td>води́ть / вози́ть</td><td><b>за- / до-</b></td><td>ghé qua / đi tới tận đích</td></tr>
+                        <tr><td>Mang tay / Xách</td><td>нести́ / тащи́ть</td><td>носи́ть / таска́ть</td><td><b>об- (обо-) / с-</b></td><td>đi vòng quanh / đi xuống, tụ họp</td></tr>
+                        <tr><td>Đuổi theo / Lăn</td><td>гнать / кати́ть</td><td>гоня́ть / ката́ть</td><td><b>раз- (рас-) / на-</b></td><td>tản ra nhiều hướng / va chạm</td></tr>
+                    </tbody>
+                </table>
                 <div class="note-callout">
                     <b>Quy tắc vàng tạo cặp thể СВ / НСВ cho Động từ chuyển động:</b><br/>
                     • <b>Nhóm 1 (1 chiều) + Tiền tố → Thể Hoàn thành (СВ)</b>: <i>прийти́, прие́хать, уйти́, вы́йти, зайти́</i>.<br/>
@@ -862,16 +831,14 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
     '5. Giới từ & Thời gian': """
             <div class="clean-card">
                 <div class="clean-label"><span>Giới từ địa điểm (В/НА · ИЗ/С · У/К/ОТ) &amp; Thời gian</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Где? (C6)</th><th>Куда́? (C4)</th><th>Отку́да? (C2)</th><th>Bắt buộc dùng «НА»</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>в</b> + C6</td><td><b>в</b> + C4</td><td><b>из</b> + C2</td><td rowspan="3">на факульте́те, на ка́федре, на ку́рсе, на ле́кции, на экза́мене, на пра́ктике, на рабо́те, на по́чте, на вокза́ле, на заво́де</td></tr>
-                            <tr><td><b>на</b> + C6</td><td><b>на</b> + C4</td><td><b>с</b> + C2</td></tr>
-                            <tr><td><b>у</b> + C2</td><td><b>к</b> + C3</td><td><b>от</b> + C2</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Где? (C6)</th><th>Куда́? (C4)</th><th>Отку́да? (C2)</th><th>Bắt buộc dùng «НА»</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>в</b> + C6</td><td><b>в</b> + C4</td><td><b>из</b> + C2</td><td rowspan="3">на факульте́те, на ка́федре, на ку́рсе, на ле́кции, на экза́мене, на пра́ктике, на рабо́те, на по́чте, на вокза́ле, на заво́де</td></tr>
+                        <tr><td><b>на</b> + C6</td><td><b>на</b> + C4</td><td><b>с</b> + C2</td></tr>
+                        <tr><td><b>у</b> + C2</td><td><b>к</b> + C3</td><td><b>от</b> + C2</td></tr>
+                    </tbody>
+                </table>
                 <div class="note-callout">
                     <b>Thời gian:</b> Thứ (<b>в</b> + C4: в сре́ду) · Tháng (<b>в</b> + C6: в ноябре́) · Ngày (Số thứ tự + Tháng đều <b>C2</b>: пе́рвого сентября́) · Bao lâu nữa (<b>че́рез</b> + C4) · Trước đây (C4 + <b>наза́д</b>).
                 </div>
@@ -881,33 +848,29 @@ KNOWLEDGE_HUB_CONTENT: Dict[str, str] = {
     '6. Số từ & Lượng từ': """
             <div class="clean-card">
                 <div class="clean-label"><span>Quy tắc ghép Số đếm với Danh từ</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Số tận cùng</th><th>Cách của Danh từ</th><th>рубль</th><th>год</th><th>час</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>1</b> (trừ 11)</td><td>Cách 1 số ít</td><td>оди́н рубль</td><td>оди́н год</td><td>оди́н час</td></tr>
-                            <tr><td><b>2, 3, 4</b> (trừ 12–14)</td><td>Cách 2 số ít</td><td>два рубля́</td><td>три го́да</td><td>четы́ре часа́</td></tr>
-                            <tr><td><b>5–20, 0, мно́го, ма́ло</b></td><td>Cách 2 số nhiều</td><td>пять рубле́й</td><td>пять <b>лет</b></td><td>пять часо́в</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Số tận cùng</th><th>Cách của Danh từ</th><th>рубль</th><th>год</th><th>час</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>1</b> (trừ 11)</td><td>Cách 1 số ít</td><td>оди́н рубль</td><td>оди́н год</td><td>оди́н час</td></tr>
+                        <tr><td><b>2, 3, 4</b> (trừ 12–14)</td><td>Cách 2 số ít</td><td>два рубля́</td><td>три го́да</td><td>четы́ре часа́</td></tr>
+                        <tr><td><b>5–20, 0, мно́го, ма́ло</b></td><td>Cách 2 số nhiều</td><td>пять рубле́й</td><td>пять <b>лет</b></td><td>пять часо́в</td></tr>
+                    </tbody>
+                </table>
             </div>
             
 """,
     '7. Câu ghép & Từ nối': """
             <div class="clean-card">
                 <div class="clean-label"><span>Cấu trúc câu ghép &amp; Từ nối học thuật</span></div>
-                <div class="table-wrap">
-                    <table class="clean-table">
-                        <thead><tr><th>Từ nối</th><th>Quy tắc</th><th>Ví dụ</th></tr></thead>
-                        <tbody>
-                            <tr><td><b>что́бы</b></td><td>Cùng chủ ngữ: nguyên thể · Khác chủ ngữ: <b>Quá khứ</b></td><td>Я хочу́, что́бы ты <b>пришёл</b>.</td></tr>
-                            <tr><td><b>кото́рый</b></td><td>Giống &amp; số theo danh từ trước; Cách theo mệnh đề sau</td><td>Кни́га, <b>кото́рую</b> я чита́ю (C4).</td></tr>
-                            <tr><td><b>благодаря́ / из-за</b></td><td>благодаря́ + C3 (nhờ vào) · из-за + C2 (tại vì)</td><td>Благодаря́ по́мощи · Из-за дождя́.</td></tr>
-                            <tr><td><b>несмотря́ на</b></td><td>+ Cách 4 (mặc dù)</td><td>Несмотря́ на сло́жность зада́чи...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+                <table class="clean-table">
+                    <thead><tr><th>Từ nối</th><th>Quy tắc</th><th>Ví dụ</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>что́бы</b></td><td>Cùng chủ ngữ: nguyên thể · Khác chủ ngữ: <b>Quá khứ</b></td><td>Я хочу́, что́бы ты <b>пришёл</b>.</td></tr>
+                        <tr><td><b>кото́рый</b></td><td>Giống &amp; số theo danh từ trước; Cách theo mệnh đề sau</td><td>Кни́га, <b>кото́рую</b> я чита́ю (C4).</td></tr>
+                        <tr><td><b>благодаря́ / из-за</b></td><td>благодаря́ + C3 (nhờ vào) · из-за + C2 (tại vì)</td><td>Благодаря́ по́мощи · Из-за дождя́.</td></tr>
+                        <tr><td><b>несмотря́ на</b></td><td>+ Cách 4 (mặc dù)</td><td>Несмотря́ на сло́жность зада́чи...</td></tr>
+                    </tbody>
+                </table>
             </div>
             
 """,
